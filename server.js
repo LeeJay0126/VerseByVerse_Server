@@ -1,70 +1,59 @@
 require("dotenv").config();
 const express = require("express");
+const mongoose = require("mongoose");
 const session = require("express-session");
+const MongoStore = require("connect-mongo");
 const cors = require("cors");
-const cookieParser = require("cookie-parser");
 const morgan = require("morgan");
+const cookieParser = require("cookie-parser");
+
+const {
+  PORT = 4000,
+  MONGO_URI,
+  SESSION_SECRET = "dev",
+  NODE_ENV = "development",
+  CLIENT_ORIGIN = "http://localhost:3000",
+} = process.env;
+
+console.log(">>> VerseByVerse auth server starting...");
+console.log("MONGO_URI =", MONGO_URI);
 
 const app = express();
-const PORT = process.env.PORT || 4000;
 
-// HARDCODED ACCOUNT FOR TESTING
-const HARDCODED_USER = {
-  email: "test@test.com",
-  password: "1234",
-  id: "user-001",
-};
+// MongoDB 연결
+mongoose.set("strictQuery", true);
+mongoose.connect(MONGO_URI)
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch((e) => { console.error("❌ Mongo error:", e); process.exit(1); });
+
 
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
+app.use(cors({ origin: CLIENT_ORIGIN, credentials: true }));
+app.set("trust proxy", 1);
 
-// allow to take session cookie from frontend
-app.use(cors({
-  origin: "http://localhost:3000",
-  credentials: true
+// Sesseion
+app.use(session({
+  name: "connect.sid",
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  store: MongoStore.create({
+    mongoUrl: MONGO_URI,
+    collectionName: "sessions",
+    ttl: 60 * 60 * 2
+  }),
+  cookie: {
+    httpOnly: true,
+    secure: NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 1000 * 60 * 60 * 2
+  }
 }));
 
-// Session setings (to be changed to db)
-app.use(
-  session({
-    secret: "dev-secret", // CHANGE WHEN PUBLISHING
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: false,       // false when local
-      sameSite: "lax",
-      maxAge: 1000 * 60 * 60, // 1 hour
-    },
-  })
-);
+// 라우트 등록
+app.get("/health", (_req, res) => res.json({ ok: true }));
+app.use("/auth", require("./auth"));
 
-// login
-app.post("/auth/login", (req, res) => {
-  const { email, password } = req.body;
-
-  if (email === HARDCODED_USER.email && password === HARDCODED_USER.password) {
-    req.session.userId = HARDCODED_USER.id;
-    return res.json({ ok: true, user: { id: HARDCODED_USER.id, email: HARDCODED_USER.email } });
-  }
-  return res.status(401).json({ ok: false, error: "Invalid credentials" });
-});
-
-// my info
-app.get("/auth/me", (req, res) => {
-  if (!req.session.userId) {
-    return res.status(401).json({ ok: false, error: "Not logged in" });
-  }
-  return res.json({ ok: true, user: { id: HARDCODED_USER.id, email: HARDCODED_USER.email } });
-});
-
-// logout
-app.post("/auth/logout", (req, res) => {
-  req.session.destroy(() => {
-    res.clearCookie("connect.sid");
-    res.json({ ok: true });
-  });
-});
-
-app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`http://localhost:${PORT}`));
