@@ -72,7 +72,9 @@ app.use(
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // all user/auth endpoints: /auth/signup, /auth/login, /auth/me, /auth/logout
-app.use("/auth", userRoutes);
+// server.js
+app.use("/auth", require("./routes/UserRoutes"));
+
 
 // bible passage endpoints: /api/passage/:versionId/:chapterId
 app.use("/api", passageRoutes);

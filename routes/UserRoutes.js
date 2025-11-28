@@ -5,29 +5,48 @@ const User = require("../models/User");
 
 const router = express.Router();
 
-// POST /auth/signup
+/**
+ * POST /auth/signup
+ * Create account with email + username + password
+ * Does NOT auto-login (no session set) so user must log in afterward.
+ */
 router.post("/signup", async (req, res) => {
   try {
-    let { firstName, lastName, email, password } = req.body || {};
+    let { firstName, lastName, email, username, password } = req.body || {};
+
     if (!firstName || !lastName) {
       return res.status(400).json({ ok: false, error: "name required" });
     }
-    if (!email || !password) {
+    if (!email || !password || !username) {
       return res
         .status(400)
-        .json({ ok: false, error: "email/password required" });
+        .json({ ok: false, error: "email/username/password required" });
     }
 
-    // normalize email
     email = email.trim().toLowerCase();
+    username = username.trim().toLowerCase();
 
-    console.log("[signup payload]", { firstName, lastName, email });
+    console.log("[signup payload]", { firstName, lastName, email, username });
 
-    const exists = await User.findOne({ email });
+    // Check duplicates for email OR username
+    const exists = await User.findOne({
+      $or: [{ email }, { username }],
+    });
+
     if (exists) {
+      if (exists.email === email) {
+        return res
+          .status(409)
+          .json({ ok: false, error: "Email already registered" });
+      }
+      if (exists.username === username) {
+        return res
+          .status(409)
+          .json({ ok: false, error: "Username already taken" });
+      }
       return res
         .status(409)
-        .json({ ok: false, error: "Email already registered" });
+        .json({ ok: false, error: "Account already exists" });
     }
 
     const hash = await bcrypt.hash(password, 10);
@@ -35,15 +54,20 @@ router.post("/signup", async (req, res) => {
       firstName,
       lastName,
       email,
+      username,
       password: hash,
     });
 
-    req.session.userId = user._id.toString();
+    // 🔹 IMPORTANT: do NOT set req.session.userId here
+    // We want the user to log in again after signup.
+    // req.session.userId = user._id.toString();
+
     return res.status(201).json({
       ok: true,
       user: {
         id: user._id,
         email: user.email,
+        username: user.username,
         firstName: user.firstName,
         lastName: user.lastName,
       },
@@ -53,51 +77,76 @@ router.post("/signup", async (req, res) => {
     if (e?.code === 11000) {
       return res
         .status(409)
-        .json({ ok: false, error: "Email already registered" });
+        .json({ ok: false, error: "Email or username already registered" });
     }
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
   }
 });
 
-// POST /auth/login
+/**
+ * POST /auth/login
+ * Accepts either email OR username via "identifier"
+ * e.g. { identifier: "jay@example.com", password: "..." }
+ *   or { identifier: "jaylee", password: "..." }
+ */
 router.post("/login", async (req, res) => {
   try {
-    let { email, password } = req.body || {};
-    if (!email || !password) {
+    let { identifier, email, password } = req.body || {};
+
+    // keep backward compatibility with old `email` clients
+    const loginId = (identifier || email || "").trim().toLowerCase();
+
+    if (!loginId || !password) {
       return res
         .status(400)
-        .json({ ok: false, error: "email/password required" });
+        .json({ ok: false, error: "id/email and password required" });
     }
 
-    email = email.trim().toLowerCase();
+    // Decide whether loginId is email or username
+    const query = loginId.includes("@")
+      ? { email: loginId }
+      : { username: loginId };
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne(query);
     if (!user) {
-      return res.status(401).json({ ok: false, error: "Invalid credentials" });
+      return res
+        .status(401)
+        .json({ ok: false, error: "Invalid credentials" });
     }
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) {
-      return res.status(401).json({ ok: false, error: "Invalid credentials" });
+      return res
+        .status(401)
+        .json({ ok: false, error: "Invalid credentials" });
     }
 
     req.session.userId = user._id.toString();
+
     return res.json({
       ok: true,
       user: {
         id: user._id,
         email: user.email,
+        username: user.username,
         firstName: user.firstName,
         lastName: user.lastName,
       },
     });
   } catch (e) {
     console.error("[login error]", e);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
   }
 });
 
-// GET /auth/me
+/**
+ * GET /auth/me
+ * Returns current logged-in user based on session
+ */
 router.get("/me", async (req, res) => {
   if (!req.session?.userId) {
     return res.status(401).json({ ok: false, error: "Not authenticated" });
@@ -105,7 +154,7 @@ router.get("/me", async (req, res) => {
 
   try {
     const user = await User.findById(req.session.userId).select(
-      "_id email firstName lastName role createdAt"
+      "_id email username firstName lastName role createdAt"
     );
 
     if (!user) {
@@ -115,23 +164,21 @@ router.get("/me", async (req, res) => {
     return res.json({ ok: true, user });
   } catch (e) {
     console.error("[me error]", e);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
   }
 });
 
-// POST /auth/logout
+/**
+ * POST /auth/logout
+ * Destroys the session and clears cookie
+ */
 router.post("/logout", (req, res) => {
   req.session.destroy(() => {
     res.clearCookie("connect.sid");
     res.json({ ok: true });
   });
 });
-
-/**
- * 🔌 Future: find password / reset password endpoints
- * e.g.
- * router.post("/forgot-password", ...)
- * router.post("/reset-password", ...)
- */
 
 module.exports = router;
