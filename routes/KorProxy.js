@@ -102,7 +102,7 @@ router.get("/passage/:versionId/:chapterId", async (req, res) => {
     return res.status(501).json({ error: "Not implemented for this versionId" });
   } catch (err) {
     console.error("Error fetching passage:", err);
-    return res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: err.message });
   }
 });
 

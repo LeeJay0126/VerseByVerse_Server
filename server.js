@@ -10,6 +10,7 @@ const cookieParser = require("cookie-parser");
 
 const userRoutes = require("./routes/UserRoutes");
 const passageRoutes = require("./routes/KorProxy");
+const communityRoutes = require("./routes/communityRoutes");
 
 const {
   PORT = 4000,
@@ -73,16 +74,18 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // all user/auth endpoints: /auth/signup, /auth/login, /auth/me, /auth/logout
 // server.js
-app.use("/auth", require("./routes/UserRoutes"));
-
+app.use("/auth", userRoutes);
 
 // bible passage endpoints: /api/passage/:versionId/:chapterId
 app.use("/api", passageRoutes);
 
+// Community related Routes. 
+app.use("/community", communityRoutes);
+
 // --- Global error handler (optional) ---
 app.use((err, req, res, next) => {
   console.error("[unhandled error]", err);
-  res.status(500).json({ ok: false, error: "Internal server error" });
+  res.status(500).json({ ok: false, error: err.message });
 });
 
 // --- Start server ---
