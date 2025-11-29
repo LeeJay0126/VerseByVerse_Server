@@ -81,7 +81,7 @@ router.post("/signup", async (req, res) => {
     }
     return res
       .status(500)
-      .json({ ok: false, error: "Internal server error" });
+      .json({ ok: false, error: err.message });
   }
 });
 
@@ -139,7 +139,7 @@ router.post("/login", async (req, res) => {
     console.error("[login error]", e);
     return res
       .status(500)
-      .json({ ok: false, error: "Internal server error" });
+      .json({ ok: false, error: err.message });
   }
 });
 
@@ -166,7 +166,7 @@ router.get("/me", async (req, res) => {
     console.error("[me error]", e);
     return res
       .status(500)
-      .json({ ok: false, error: "Internal server error" });
+      .json({ ok: false, error: err.message });
   }
 });
 
