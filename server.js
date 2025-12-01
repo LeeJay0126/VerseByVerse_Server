@@ -11,6 +11,7 @@ const cookieParser = require("cookie-parser");
 const userRoutes = require("./routes/UserRoutes");
 const passageRoutes = require("./routes/KorProxy");
 const communityRoutes = require("./routes/communityRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
 
 const {
   PORT = 4000,
@@ -81,6 +82,9 @@ app.use("/api", passageRoutes);
 
 // Community related Routes. 
 app.use("/community", communityRoutes);
+
+// Notification Routes
+app.use("/notifications", notificationRoutes);
 
 // --- Global error handler (optional) ---
 app.use((err, req, res, next) => {
