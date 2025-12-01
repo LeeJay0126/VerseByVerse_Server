@@ -1,8 +1,9 @@
-// routes/communityRoutes.js
 const express = require("express");
 const Community = require("../models/Community");
 const CommunityMembership = require("../models/CommunityMembership");
+const User = require("../models/User");
 const requireAuth = require("../middleware/requireAuth");
+const createNotification = require("../utils/createNotifications");
 
 const router = express.Router();
 
@@ -16,7 +17,9 @@ router.post("/", requireAuth, async (req, res) => {
     const userId = req.session.userId;
 
     if (!header || !subheader || !content || !type) {
-      return res.status(400).json({ ok: false, error: "Missing required fields" });
+      return res
+        .status(400)
+        .json({ ok: false, error: "Missing required fields" });
     }
 
     const community = await Community.create({
@@ -68,7 +71,7 @@ router.get("/my", requireAuth, async (req, res) => {
       .exec();
 
     const communities = memberships
-      .filter((m) => m.community) // safety
+      .filter((m) => m.community)
       .map((m) => {
         const c = m.community;
         return {
@@ -79,7 +82,7 @@ router.get("/my", requireAuth, async (req, res) => {
           type: c.type,
           members: c.membersCount,
           lastActivityAt: c.lastActivityAt,
-          role: m.role,     // "Owner" / "Leader" / "Member"
+          role: m.role,
           my: true,
         };
       });
@@ -93,11 +96,6 @@ router.get("/my", requireAuth, async (req, res) => {
 
 /**
  * GET /community/discover
- * Browse communities (used by BrowseCommunity.jsx)
- * Supports optional query params:
- *   q    - search text
- *   type - community type
- *   size - "small" | "medium" | "large"
  */
 router.get("/discover", async (req, res) => {
   try {
@@ -132,7 +130,6 @@ router.get("/discover", async (req, res) => {
       .limit(50)
       .exec();
 
-    // figure out which of these the current user is already in
     let membershipsByCommunity = {};
     if (userId) {
       const memberships = await CommunityMembership.find({
@@ -167,6 +164,113 @@ router.get("/discover", async (req, res) => {
   } catch (err) {
     console.error("[discover communities error]", err);
     return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * POST /community/:id/invite
+ * Body: { userId: "..." }
+ * Owner/Leader invites someone
+ */
+router.post("/:id/invite", requireAuth, async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+    const { userId: inviteeId } = req.body;
+    const inviterId = req.session.userId;
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) {
+      return res.status(404).json({ ok: false, error: "Community not found" });
+    }
+
+    // Check inviter is Owner or Leader in this community
+    const inviterMembership = await CommunityMembership.findOne({
+      user: inviterId,
+      community: communityId,
+    }).exec();
+
+    if (!inviterMembership || !["Owner", "Leader"].includes(inviterMembership.role)) {
+      return res.status(403).json({
+        ok: false,
+        error: "You do not have permission to invite members to this community",
+      });
+    }
+
+    const inviter = await User.findById(inviterId)
+      .select("firstName lastName")
+      .exec();
+    const invitee = await User.findById(inviteeId)
+      .select("firstName lastName email")
+      .exec();
+
+    if (!invitee) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "User to invite not found" });
+    }
+
+    const inviterName = inviter
+      ? `${inviter.firstName} ${inviter.lastName}`
+      : "Someone";
+
+    const message = `${inviterName} has invited you to join ${community.header}.`;
+
+    await createNotification({
+      user: invitee._id,
+      type: "COMMUNITY_INVITE",
+      message,
+      community: community._id,
+      actor: inviterId,
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[community invite error]", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /community/:id/request-join
+ * Authenticated user requests to join a community
+ */
+router.post("/:id/request-join", requireAuth, async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+    const requesterId = req.session.userId;
+
+    const community = await Community.findById(communityId)
+      .populate("owner")
+      .exec();
+    if (!community) {
+      return res.status(404).json({ ok: false, error: "Community not found" });
+    }
+
+    const requester = await User.findById(requesterId)
+      .select("firstName lastName")
+      .exec();
+    const requesterName = requester
+      ? `${requester.firstName} ${requester.lastName}`
+      : "A user";
+
+    const message = `${requesterName} has requested to join ${community.header}.`;
+
+    await createNotification({
+      user: community.owner, // receiver (owner)
+      type: "COMMUNITY_JOIN_REQUEST",
+      message,
+      community: community._id,
+      actor: requesterId,
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[community join-request error]", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
   }
 });
 
