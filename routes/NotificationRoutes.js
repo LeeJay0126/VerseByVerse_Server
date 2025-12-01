@@ -1,142 +1,212 @@
 const express = require("express");
 const requireAuth = require("../middleware/requireAuth");
+const Notification = require("../models/Notifications");
 const Community = require("../models/Community");
 const CommunityMembership = require("../models/CommunityMembership");
-const User = require("../models/User");
-const createNotification = require("../utils/createNotification");
+const createNotification = require("../utils/createNotifications");
 
 const router = express.Router();
 
-router.post("/:id/read", requireAuth, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const userId = req.session.userId;
-
-        const notification = await Notification.findOneAndUpdate(
-            { _id: id, user: userId },
-            { $set: { readAt: new Date() } },
-            { new: true }
-        );
-
-        if (!notification) {
-            return res.status(404).json({ ok: false, error: "Notification not found" });
-        }
-
-        return res.json({ ok: true, notification });
-    } catch (err) {
-        console.error("[notification read error]", err);
-        return res.status(500).json({ ok: false, error: "Internal server error" });
-    }
-});
-
 // GET /notifications?unread=true
 router.get("/", requireAuth, async (req, res) => {
-    try {
-        const { unread } = req.query;
-        const filter = { user: req.session.userId };
+  try {
+    const { unread } = req.query;
+    const filter = { user: req.session.userId };
 
-        if (unread === "true") {
-            filter.readAt = null;
-        }
-
-        const notifications = await Notification.find(filter)
-            .sort({ createdAt: -1 })
-            .limit(50)
-            .lean()
-            .exec();
-
-        return res.json({ ok: true, notifications });
-    } catch (err) {
-        console.error("[notifications list error]", err);
-        return res.status(500).json({ ok: false, error: "Internal server error" });
+    if (unread === "true") {
+      filter.readAt = null;
     }
+
+    const notifications = await Notification.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean()
+      .exec();
+
+    return res.json({ ok: true, notifications });
+  } catch (err) {
+    console.error("[notifications list error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// POST /notifications/:id/read
+router.post("/:id/read", requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.session.userId;
+
+    const notification = await Notification.findOneAndUpdate(
+      { _id: id, user: userId },
+      { $set: { readAt: new Date() } },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "Notification not found" });
+    }
+
+    return res.json({ ok: true, notification });
+  } catch (err) {
+    console.error("[notification read error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// POST /notifications/read-all
+router.post("/read-all", requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+
+    const result = await Notification.updateMany(
+      { user: userId, readAt: null },
+      { $set: { readAt: new Date() } }
+    );
+
+    return res.json({ ok: true, modifiedCount: result.modifiedCount });
+  } catch (err) {
+    console.error("[notifications read-all error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// DELETE /notifications
+router.delete("/", requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+
+    const result = await Notification.deleteMany({ user: userId });
+
+    return res.json({ ok: true, deletedCount: result.deletedCount });
+  } catch (err) {
+    console.error("[notifications delete-all error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
 });
 
 /**
- * POST /community/:id/invite
- * Body: { userId: "..." }
- * Owner/Leader invites someone
+ * POST /notifications/:id/act
+ * Body: { action: "accept" | "decline" }
  */
-router.post("/:id/invite", requireAuth, async (req, res) => {
-    try {
-        const { id: communityId } = req.params;
-        const { userId: inviteeId } = req.body;
-        const inviterId = req.session.userId;
+router.post("/:id/act", requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const { id } = req.params;
+    const { action } = req.body;
 
-        const community = await Community.findById(communityId).exec();
-        if (!community) {
-            return res.status(404).json({ ok: false, error: "Community not found" });
-        }
+    if (!["accept", "decline"].includes(action)) {
+      return res.status(400).json({ ok: false, error: "Invalid action" });
+    }
 
-        // TODO: check inviter is owner/leader using CommunityMembership
-        // const membership = await CommunityMembership.findOne({ user: inviterId, community: communityId });
-        // if (!membership || !["Owner", "Leader"].includes(membership.role)) { ... }
+    const notification = await Notification.findOne({
+      _id: id,
+      user: userId,
+    }).exec();
 
-        const inviter = await User.findById(inviterId).select("firstName lastName").exec();
-        const invitee = await User.findById(inviteeId).select("firstName lastName email").exec();
-        if (!invitee) {
-            return res.status(404).json({ ok: false, error: "User to invite not found" });
-        }
+    if (!notification) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "Notification not found" });
+    }
 
-        const inviterName = inviter ? `${inviter.firstName} ${inviter.lastName}` : "Someone";
+    if (notification.status && notification.status !== "pending") {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Notification already handled" });
+    }
 
-        const message = `${inviterName} has invited you to join ${community.header}.`;
+    const { type, community: communityId, actor: otherUserId } = notification;
 
-        await createNotification({
-            user: invitee._id,
-            type: "COMMUNITY_INVITE",
-            message,
-            community: community._id,
-            actor: inviterId,
-            // later you can add target: { kind: "INVITE", id: inviteDoc._id }
+    if (!communityId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Notification missing community context",
+      });
+    }
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) {
+      notification.status = "declined";
+      notification.readAt = new Date();
+      await notification.save();
+      return res.status(404).json({
+        ok: false,
+        error: "Community no longer exists",
+      });
+    }
+
+    async function ensureMembership(user, role = "Member") {
+      let membership = await CommunityMembership.findOne({
+        user,
+        community: community._id,
+      }).exec();
+
+      if (!membership) {
+        membership = await CommunityMembership.create({
+          user,
+          community: community._id,
+          role,
         });
 
-        return res.json({ ok: true });
-    } catch (err) {
-        console.error("[community invite error]", err);
-        return res.status(500).json({ ok: false, error: "Internal server error" });
+        community.membersCount = (community.membersCount || 0) + 1;
+        await community.save();
+      }
+
+      return membership;
     }
-});
 
-/**
- * POST /community/:id/request-join
- * Authenticated user requests to join a community
- */
-router.post("/:id/request-join", requireAuth, async (req, res) => {
-    try {
-        const { id: communityId } = req.params;
-        const requesterId = req.session.userId;
+    if (type === "COMMUNITY_JOIN_REQUEST") {
+      // this notification goes TO owner (or leader)
+      // notification.actor = requester
+      if (!["accept", "decline"].includes(action)) {
+        return res.status(400).json({ ok: false, error: "Invalid action" });
+      }
 
-        const community = await Community.findById(communityId).populate("owner").exec();
-        if (!community) {
-            return res.status(404).json({ ok: false, error: "Community not found" });
+      if (action === "accept") {
+        if (!otherUserId) {
+          return res
+            .status(400)
+            .json({ ok: false, error: "Missing requester information" });
         }
 
-        // TODO: optionally prevent duplicate pending requests
+        await ensureMembership(otherUserId, "Member");
 
-        const requester = await User.findById(requesterId).select("firstName lastName").exec();
-        const requesterName = requester
-            ? `${requester.firstName} ${requester.lastName}`
-            : "A user";
-
-        const message = `${requesterName} has requested to join ${community.header}.`;
-
-        // For now, notify only the owner. Later you can include leaders too.
+        // Optional: notify requester that they were accepted
         await createNotification({
-            user: community.owner, // receiver (owner)
-            type: "COMMUNITY_JOIN_REQUEST",
-            message,
-            community: community._id,
-            actor: requesterId,
-            // target: { kind: "JOIN_REQUEST", id: joinRequestDoc._id } // once you add a join-request model
+          user: otherUserId,
+          type: "COMMUNITY_INVITE", // or a new type like "COMMUNITY_JOIN_ACCEPTED"
+          message: `Your request to join ${community.header} was accepted.`,
+          community: community._id,
+          actor: userId,
         });
+      }
 
-        return res.json({ ok: true });
-    } catch (err) {
-        console.error("[community join-request error]", err);
-        return res.status(500).json({ ok: false, error: "Internal server error" });
+      // mark original notification as handled
+      notification.status = action === "accept" ? "accepted" : "declined";
+      notification.readAt = new Date();
+      await notification.save();
+    } else if (type === "COMMUNITY_INVITE") {
+      if (action === "accept") {
+        await ensureMembership(userId, "Member");
+      }
+
+      notification.status = action === "accept" ? "accepted" : "declined";
+      notification.readAt = new Date();
+      await notification.save();
+    } else {
+      return res.status(400).json({
+        ok: false,
+        error: "Action not supported for this notification type",
+      });
     }
-});
 
+    return res.json({ ok: true, notification });
+  } catch (err) {
+    console.error("[notification act error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
 
 module.exports = router;
