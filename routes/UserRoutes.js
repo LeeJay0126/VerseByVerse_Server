@@ -58,7 +58,7 @@ router.post("/signup", async (req, res) => {
       password: hash,
     });
 
-    // 🔹 IMPORTANT: do NOT set req.session.userId here
+    // IMPORTANT: do NOT set req.session.userId here
     // We want the user to log in again after signup.
     // req.session.userId = user._id.toString();
 
@@ -81,7 +81,7 @@ router.post("/signup", async (req, res) => {
     }
     return res
       .status(500)
-      .json({ ok: false, error: err.message });
+      .json({ ok: false, error: e.message });
   }
 });
 
@@ -139,7 +139,7 @@ router.post("/login", async (req, res) => {
     console.error("[login error]", e);
     return res
       .status(500)
-      .json({ ok: false, error: err.message });
+      .json({ ok: false, error: e.message });
   }
 });
 
@@ -166,7 +166,7 @@ router.get("/me", async (req, res) => {
     console.error("[me error]", e);
     return res
       .status(500)
-      .json({ ok: false, error: err.message });
+      .json({ ok: false, error: e.message });
   }
 });
 
@@ -179,6 +179,67 @@ router.post("/logout", (req, res) => {
     res.clearCookie("connect.sid");
     res.json({ ok: true });
   });
+});
+
+
+/**
+ * POST /auth/change-password
+ * Body: { currentPassword, newPassword }
+ * Requires active session. On success, updates password and logs user out.
+ */
+router.post("/change-password", async (req, res) => {
+  try {
+    if (!req.session?.userId) {
+      return res.status(401).json({ ok: false, error: "Not authenticated" });
+    }
+
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "current/new password required" });
+    }
+
+    if (newPassword.length < 4) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "New password is too short" });
+    }
+
+    const user = await User.findById(req.session.userId);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: "User not found" });
+    }
+
+    const valid = await bcrypt.compare(currentPassword, user.password);
+    if (!valid) {
+      return res
+        .status(401)
+        .json({ ok: false, error: "Current password is incorrect" });
+    }
+
+    const sameAsOld = await bcrypt.compare(newPassword, user.password);
+    if (sameAsOld) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "New password must be different" });
+    }
+
+    const hash = await bcrypt.hash(newPassword, 10);
+    user.password = hash;
+    await user.save();
+
+    // log out after password change
+    req.session.destroy(() => {
+      res.clearCookie("connect.sid");
+      return res.json({ ok: true });
+    });
+  } catch (e) {
+    console.error("[change-password error]", e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
+  }
 });
 
 module.exports = router;
