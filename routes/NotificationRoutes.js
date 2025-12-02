@@ -79,12 +79,25 @@ router.delete("/", requireAuth, async (req, res) => {
 
     const result = await Notification.deleteMany({ user: userId });
 
-    return res.json({ ok: true, deletedCount: result.deletedCount });
+    if (result.deletedCount === 0) {
+      // nothing was deleted
+      return res
+        .status(400)
+        .json({ ok: false, error: "No notification to delete" });
+    }
+
+    return res.json({
+      ok: true,
+      deletedCount: result.deletedCount,
+    });
   } catch (err) {
     console.error("[notifications delete-all error]", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
   }
 });
+
 
 /**
  * POST /notifications/:id/act
