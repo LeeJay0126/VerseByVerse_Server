@@ -45,8 +45,18 @@ mongoose
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
-app.use(cors({ origin: CLIENT_ORIGIN, credentials: true }));
+
+const corsOptions = {
+  origin: CLIENT_ORIGIN,
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "X-Requested-With"],
+};
+
+app.use(cors(corsOptions)); // 
+
 app.set("trust proxy", 1);
+
 
 // --- Session ---
 app.use(
