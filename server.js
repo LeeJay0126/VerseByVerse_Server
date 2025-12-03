@@ -10,7 +10,7 @@ const cookieParser = require("cookie-parser");
 const userRoutes = require("./routes/UserRoutes");
 const passageRoutes = require("./routes/KorProxy");
 const communityRoutes = require("./routes/communityRoutes");
-const notificationRoutes = require("./routes/notificationRoutes");
+const notificationRoutes = require("./routes/NotificationRoutes");
 
 const {
   PORT = 4000,
