@@ -100,7 +100,7 @@ router.get("/my", requireAuth, async (req, res) => {
 router.get("/discover", async (req, res) => {
   try {
     const userId = req.session?.userId || null;
-    const { q, type, size } = req.query;
+    const { q, type, size, lastActive } = req.query;
 
     const filter = {};
 
@@ -124,6 +124,24 @@ router.get("/discover", async (req, res) => {
     } else if (size === "large") {
       filter.membersCount = { $gte: 31 };
     }
+
+    if (lastActive) {
+      const now = new Date();
+      let threshold;
+
+      if (lastActive === "7d") {
+        threshold = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      } else if (lastActive === "30d") {
+        threshold = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      } else if (lastActive === "90d") {
+        threshold = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      }
+
+      if (threshold) {
+        filter.lastActivityAt = { $gte: threshold };
+      }
+    }
+
 
     const communities = await Community.find(filter)
       .sort({ lastActivityAt: -1 })
