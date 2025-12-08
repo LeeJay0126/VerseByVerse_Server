@@ -185,6 +185,80 @@ router.get("/discover", async (req, res) => {
   }
 });
 
+// GET /community/:id
+// Detailed community view for CommunityInfo page
+router.get("/:id", async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+
+    const community = await Community.findById(communityId)
+      .populate("owner", "username firstName lastName")
+      .exec();
+
+    if (!community) {
+      return res.status(404).json({ ok: false, error: "Community not found" });
+    }
+
+    // Get all memberships for this community
+    const memberships = await CommunityMembership.find({
+      community: communityId,
+    })
+      .populate("user", "username firstName lastName")
+      .exec();
+
+    const toUserSummary = (userDoc) => {
+      if (!userDoc) return null;
+      const fullName = [userDoc.firstName, userDoc.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      return {
+        id: userDoc._id,
+        username: userDoc.username || fullName || "Unknown",
+        fullName: fullName || null,
+      };
+    };
+
+    const ownerSummary = community.owner ? toUserSummary(community.owner) : null;
+    const leaderMemberships = memberships.filter(
+      (m) => m.role === "Leader" && m.user
+    );
+    const leaders = leaderMemberships
+      .map((m) => toUserSummary(m.user))
+      .filter(Boolean);
+
+    // Members list (everyone except Owner)
+    const memberSummaries = memberships
+      .filter((m) => m.user)
+      .map((m) => ({
+        ...toUserSummary(m.user),
+        role: m.role,
+      }));
+
+    return res.json({
+      ok: true,
+      community: {
+        id: community._id,
+        header: community.header,
+        subheader: community.subheader,
+        content: community.content,
+        type: community.type,
+        membersCount: community.membersCount,
+        lastActivityAt: community.lastActivityAt,
+        owner: ownerSummary,
+        leaders,
+        members: memberSummaries,
+      },
+    });
+  } catch (err) {
+    console.error("[get community detail error]", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
+  }
+});
+
+
 /**
  * POST /community/:id/invite
  * Body: { userId: "..." }
