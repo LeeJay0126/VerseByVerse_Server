@@ -4,6 +4,7 @@ const CommunityMembership = require("../models/CommunityMembership");
 const User = require("../models/User");
 const requireAuth = require("../middleware/requireAuth");
 const createNotification = require("../utils/createNotifications");
+const CommunityPost = require("../models/CommunityPost");
 
 const router = express.Router();
 
@@ -365,5 +366,197 @@ router.post("/:id/request-join", requireAuth, async (req, res) => {
       .json({ ok: false, error: "Internal server error" });
   }
 });
+
+const mapTypeToClass = (type) => {
+  switch (type) {
+    case "questions":
+      return "questions";
+    case "announcements":
+      return "announcements";
+    default:
+      return "general";
+  }
+};
+
+const toSubtitle = (body) => {
+  if (!body) return "";
+  const trimmed = body.trim();
+  if (trimmed.length <= 140) return trimmed;
+  return trimmed.slice(0, 137) + "...";
+};
+
+/**
+ * GET /community/:id/posts
+ * List posts for a specific community
+ */
+router.get("/:id/posts", async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) {
+      return res.status(404).json({ ok: false, error: "Community not found" });
+    }
+
+    const posts = await CommunityPost.find({ community: communityId })
+      .sort({ createdAt: -1 })
+      .populate("author", "username firstName lastName")
+      .exec();
+
+    const result = posts.map((p) => {
+      const fullName = p.author
+        ? [p.author.firstName, p.author.lastName].filter(Boolean).join(" ")
+        : null;
+
+      return {
+        id: p._id,
+        title: p.title,
+        subtitle: toSubtitle(p.body),
+        category:
+          p.type === "questions"
+            ? "Questions"
+            : p.type === "announcements"
+              ? "Announcements"
+              : "General",
+        categoryClass: mapTypeToClass(p.type),
+        replyCount: p.replyCount || 0,
+        activityText: p.updatedAt || p.createdAt, // frontend will pass to Time()
+        author: fullName || p.author?.username || "Unknown",
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      };
+    });
+
+    return res.json({ ok: true, posts: result });
+  } catch (err) {
+    console.error("[get community posts error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /community/:id/posts
+ * Create a new post in a community (must be a member)
+ */
+router.post("/:id/posts", requireAuth, async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+    const userId = req.session.userId;
+    const { title, body, type } = req.body || {};
+
+    if (!title || !body) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Title and body are required." });
+    }
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) {
+      return res.status(404).json({ ok: false, error: "Community not found" });
+    }
+
+    const membership = await CommunityMembership.findOne({
+      user: userId,
+      community: communityId,
+    }).exec();
+
+    if (!membership) {
+      return res.status(403).json({
+        ok: false,
+        error: "You must join this community before posting.",
+      });
+    }
+
+    const normalizedType =
+      ["general", "questions", "announcements"].includes(
+        (type || "").toLowerCase()
+      )
+        ? type.toLowerCase()
+        : "general";
+
+    const post = await CommunityPost.create({
+      community: communityId,
+      author: userId,
+      title,
+      body,
+      type: normalizedType,
+    });
+
+    // update community lastActivityAt
+    community.lastActivityAt = new Date();
+    await community.save();
+
+    const responsePost = {
+      id: post._id,
+      title: post.title,
+      subtitle: body.length > 140 ? body.slice(0, 137) + "..." : body,
+      category:
+        normalizedType === "questions"
+          ? "Questions"
+          : normalizedType === "announcements"
+            ? "Announcements"
+            : "General",
+      categoryClass: mapTypeToClass(normalizedType),
+      replyCount: 0,
+      activityText: post.createdAt,
+      createdAt: post.createdAt,
+      updatedAt: post.updatedAt,
+    };
+
+    // --- Notify Owner & Leaders about new post ---
+    try {
+      const memberships = await CommunityMembership.find({
+        community: communityId,
+      })
+        .populate("user", "firstName lastName")
+        .exec();
+
+      const author = memberships.find(
+        (m) => String(m.user?._id) === String(userId)
+      );
+
+      const authorName = author?.user
+        ? [author.user.firstName, author.user.lastName]
+          .filter(Boolean)
+          .join(" ")
+        : "A member";
+
+      const message = `${authorName} posted “${post.title}” in ${community.header}.`;
+
+      const recipients = memberships
+        .filter(
+          (m) =>
+            ["Owner", "Leader"].includes(m.role) &&
+            String(m.user?._id) !== String(userId)
+        )
+        .map((m) => m.user?._id)
+        .filter(Boolean);
+
+      const uniqueRecipientIds = [...new Set(recipients.map(String))];
+
+      for (const uid of uniqueRecipientIds) {
+        await createNotification({
+          user: uid,
+          type: "COMMUNITY_NEW_POST",
+          message,
+          community: community._id,
+          actor: userId,
+          post: post._id,
+        });
+      }
+    } catch (notifyErr) {
+      console.error("[create community post notification error]", notifyErr);
+      // don't fail the request just because notifications failed
+    }
+
+    return res.status(201).json({ ok: true, post: responsePost });
+  } catch (err) {
+    console.error("[create community post error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+
+
 
 module.exports = router;
