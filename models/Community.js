@@ -2,9 +2,9 @@ const mongoose = require("mongoose");
 
 const CommunitySchema = new mongoose.Schema(
   {
-    header: { type: String, required: true },      
-    subheader: { type: String, required: true },     
-    content: { type: String, required: true },       
+    header: { type: String, required: true },
+    subheader: { type: String, required: true },
+    content: { type: String, required: true },
 
     type: {
       type: String,
@@ -35,6 +35,7 @@ const CommunitySchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    heroImageUrl: { type: String }, // URL to the uploaded hero image
   },
   { timestamps: true }
 );

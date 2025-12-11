@@ -46,6 +46,7 @@ app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
 
+
 const corsOptions = {
   origin: CLIENT_ORIGIN,
   credentials: true,
@@ -79,6 +80,9 @@ app.use(
   })
 );
 
+// Uploads
+const path = require("path");
+
 // --- Routes ---
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -100,6 +104,9 @@ app.use((err, req, res, next) => {
   console.error("[unhandled error]", err);
   res.status(500).json({ ok: false, error: err.message });
 });
+
+// Hero image uploads (Multer)
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // --- Start server ---
 app.listen(PORT, () => {
