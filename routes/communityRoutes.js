@@ -2,11 +2,42 @@ const express = require("express");
 const Community = require("../models/Community");
 const CommunityMembership = require("../models/CommunityMembership");
 const User = require("../models/User");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 const requireAuth = require("../middleware/requireAuth");
 const createNotification = require("../utils/createNotifications");
 const CommunityPost = require("../models/CommunityPost");
 
 const router = express.Router();
+
+// ---- Multer setup for hero images ----
+const heroUploadDir = path.join(__dirname, "..", "uploads", "community-heroes");
+if (!fs.existsSync(heroUploadDir)) {
+  fs.mkdirSync(heroUploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, heroUploadDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || ".png";
+    const filename = `community-${req.params.id}-${Date.now()}${ext}`;
+    cb(null, filename);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith("image/")) {
+      return cb(new Error("Only image files are allowed"));
+    }
+    cb(null, true);
+  },
+});
 
 /**
  * POST /community
@@ -246,6 +277,7 @@ router.get("/:id", async (req, res) => {
         type: community.type,
         membersCount: community.membersCount,
         lastActivityAt: community.lastActivityAt,
+        heroImageUrl: community.heroImageUrl || null,  // 👈 add this
         owner: ownerSummary,
         leaders,
         members: memberSummaries,
@@ -449,6 +481,13 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     const userId = req.session.userId;
     const { title, body, type } = req.body || {};
 
+    const normalizedType =
+      ["general", "questions", "announcements", "poll"].includes(
+        (type || "").toLowerCase()
+      )
+        ? type.toLowerCase()
+        : "general";
+
     if (!title || (!body && normalizedType !== "poll")) {
       return res
         .status(400)
@@ -472,12 +511,6 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
       });
     }
 
-    const normalizedType =
-      ["general", "questions", "announcements", "poll"].includes(
-        (type || "").toLowerCase()
-      )
-        ? type.toLowerCase()
-        : "general";
 
     const pollConfig = req.body.poll;
 
@@ -577,6 +610,63 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
+
+/**
+ * POST /community/:id/hero-image
+ * Upload or update the hero background image
+ */
+router.post(
+  "/:id/hero-image",
+  requireAuth,
+  upload.single("heroImage"),
+  async (req, res) => {
+    try {
+      const { id: communityId } = req.params;
+      const userId = req.session.userId;
+
+      const community = await Community.findById(communityId).exec();
+      if (!community) {
+        return res
+          .status(404)
+          .json({ ok: false, error: "Community not found" });
+      }
+
+      // Check that user is Owner or Leader
+      const membership = await CommunityMembership.findOne({
+        user: userId,
+        community: communityId,
+      }).exec();
+
+      if (!membership || !["Owner", "Leader"].includes(membership.role)) {
+        return res.status(403).json({
+          ok: false,
+          error: "You do not have permission to update this hero image.",
+        });
+      }
+
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "No file uploaded." });
+      }
+
+      // Build public URL
+      const relativePath = `/uploads/community-heroes/${req.file.filename}`;
+      community.heroImageUrl = relativePath;
+      await community.save();
+
+      return res.json({
+        ok: true,
+        heroImageUrl: relativePath,
+      });
+    } catch (err) {
+      console.error("[update community hero image error]", err);
+      return res
+        .status(500)
+        .json({ ok: false, error: "Internal server error" });
+    }
+  }
+);
 
 
 
