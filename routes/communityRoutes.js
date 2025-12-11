@@ -373,10 +373,13 @@ const mapTypeToClass = (type) => {
       return "questions";
     case "announcements":
       return "announcements";
+    case "poll":
+      return "poll";
     default:
       return "general";
   }
 };
+
 
 const toSubtitle = (body) => {
   if (!body) return "";
@@ -417,10 +420,12 @@ router.get("/:id/posts", async (req, res) => {
             ? "Questions"
             : p.type === "announcements"
               ? "Announcements"
-              : "General",
+              : p.type === "poll"
+                ? "Poll"
+                : "General",
         categoryClass: mapTypeToClass(p.type),
         replyCount: p.replyCount || 0,
-        activityText: p.updatedAt || p.createdAt, // frontend will pass to Time()
+        activityText: p.updatedAt || p.createdAt,
         author: fullName || p.author?.username || "Unknown",
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
@@ -444,7 +449,7 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     const userId = req.session.userId;
     const { title, body, type } = req.body || {};
 
-    if (!title || !body) {
+    if (!title || (!body && normalizedType !== "poll")) {
       return res
         .status(400)
         .json({ ok: false, error: "Title and body are required." });
@@ -468,19 +473,33 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     }
 
     const normalizedType =
-      ["general", "questions", "announcements"].includes(
+      ["general", "questions", "announcements", "poll"].includes(
         (type || "").toLowerCase()
       )
         ? type.toLowerCase()
         : "general";
 
+    const pollConfig = req.body.poll;
+
     const post = await CommunityPost.create({
       community: communityId,
       author: userId,
       title,
-      body,
+      body: body || "",
       type: normalizedType,
+      ...(normalizedType === "poll" && pollConfig
+        ? {
+          poll: {
+            options: (pollConfig.options || [])
+              .map((text) => ({ text: String(text).trim() }))
+              .filter((o) => o.text),
+            allowMultiple: !!pollConfig.allowMultiple,
+            anonymous: pollConfig.anonymous !== false, // default true
+          },
+        }
+        : {}),
     });
+
 
     // update community lastActivityAt
     community.lastActivityAt = new Date();
@@ -495,13 +514,16 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
           ? "Questions"
           : normalizedType === "announcements"
             ? "Announcements"
-            : "General",
+            : normalizedType === "poll"
+              ? "Poll"
+              : "General",
       categoryClass: mapTypeToClass(normalizedType),
       replyCount: 0,
       activityText: post.createdAt,
       createdAt: post.createdAt,
       updatedAt: post.updatedAt,
     };
+
 
     // --- Notify Owner & Leaders about new post ---
     try {

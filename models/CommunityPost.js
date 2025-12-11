@@ -1,4 +1,13 @@
+
 const mongoose = require("mongoose");
+
+const PollOptionSchema = new mongoose.Schema(
+  {
+    text: { type: String, required: true, trim: true },
+    votes: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
 
 const CommunityPostSchema = new mongoose.Schema(
   {
@@ -13,7 +22,6 @@ const CommunityPostSchema = new mongoose.Schema(
       required: true,
     },
 
-    // Forum-like content
     title: {
       type: String,
       required: true,
@@ -28,11 +36,17 @@ const CommunityPostSchema = new mongoose.Schema(
     // Tag / category for styling
     type: {
       type: String,
-      enum: ["general", "questions", "announcements"],
+      enum: ["general", "questions", "announcements", "poll"], // 👈 added poll
       default: "general",
     },
 
-    // For future replies feature
+    // Poll configuration (only used when type === "poll")
+    poll: {
+      options: [PollOptionSchema],
+      allowMultiple: { type: Boolean, default: false },
+      anonymous: { type: Boolean, default: true },
+    },
+
     replyCount: {
       type: Number,
       default: 0,
