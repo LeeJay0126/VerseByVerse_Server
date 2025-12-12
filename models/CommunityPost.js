@@ -1,4 +1,3 @@
-
 const mongoose = require("mongoose");
 
 const PollOptionSchema = new mongoose.Schema(
@@ -29,14 +28,17 @@ const CommunityPostSchema = new mongoose.Schema(
     },
     body: {
       type: String,
-      required: true,
       trim: true,
+      // Only required for non-poll posts
+      required: function () {
+        return this.type !== "poll";
+      },
     },
 
     // Tag / category for styling
     type: {
       type: String,
-      enum: ["general", "questions", "announcements", "poll"], // 👈 added poll
+      enum: ["general", "questions", "announcements", "poll"],
       default: "general",
     },
 

@@ -8,6 +8,8 @@ const fs = require("fs");
 const requireAuth = require("../middleware/requireAuth");
 const createNotification = require("../utils/createNotifications");
 const CommunityPost = require("../models/CommunityPost");
+const CommunityReply = require("../models/CommunityReply");
+const CommunityPollVote = require("../models/CommunityPollVote");
 
 const router = express.Router();
 
@@ -538,10 +540,13 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     community.lastActivityAt = new Date();
     await community.save();
 
+    const safeBody = body || "";
+
     const responsePost = {
       id: post._id,
       title: post.title,
-      subtitle: body.length > 140 ? body.slice(0, 137) + "..." : body,
+      subtitle:
+        safeBody.length > 140 ? safeBody.slice(0, 137) + "..." : safeBody,
       category:
         normalizedType === "questions"
           ? "Questions"
@@ -667,6 +672,311 @@ router.post(
     }
   }
 );
+
+/**
+ * GET /community/:id/posts/:postId
+ * Get a single post with basic community info
+ */
+router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
+  try {
+    const { id: communityId, postId } = req.params;
+    const userId = req.session.userId;
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "Community not found" });
+    }
+
+    const post = await CommunityPost.findOne({
+      _id: postId,
+      community: communityId,
+    })
+      .populate("author", "username firstName lastName")
+      .exec();
+
+    if (!post) {
+      return res.status(404).json({ ok: false, error: "Post not found" });
+    }
+
+    const fullName = post.author
+      ? [post.author.firstName, post.author.lastName].filter(Boolean).join(" ")
+      : null;
+
+    // --- Poll aggregation ---
+    let poll = null;
+    let pollResults = null;
+    let myVotes = [];
+
+    if (post.type === "poll" && post.poll && post.poll.options.length) {
+      const votes = await CommunityPollVote.find({ post: post._id }).exec();
+
+      const counts = Array(post.poll.options.length).fill(0);
+      votes.forEach((v) => {
+        if (v.optionIndex >= 0 && v.optionIndex < counts.length) {
+          counts[v.optionIndex]++;
+        }
+      });
+
+      const totalVotes = counts.reduce((a, b) => a + b, 0);
+
+      poll = {
+        options: post.poll.options.map((opt) => ({ text: opt.text })),
+        allowMultiple: post.poll.allowMultiple,
+        anonymous: post.poll.anonymous,
+      };
+
+      pollResults = {
+        counts,
+        totalVotes,
+      };
+
+      myVotes = votes
+        .filter((v) => String(v.user) === String(userId))
+        .map((v) => v.optionIndex);
+    }
+
+    const responsePost = {
+      id: post._id,
+      title: post.title,
+      body: post.body,
+      type: post.type,
+      replyCount: post.replyCount || 0,
+      createdAt: post.createdAt,
+      updatedAt: post.updatedAt,
+      author: fullName || post.author?.username || "Unknown",
+      poll,
+      pollResults,
+      myVotes,
+    };
+
+    return res.json({
+      ok: true,
+      post: responsePost,
+      community: {
+        id: community._id,
+        header: community.header,
+        subheader: community.subheader,
+      },
+    });
+  } catch (err) {
+    console.error("[get community post detail error]", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /community/:id/posts/:postId/vote
+ * Body: { optionIndex }
+ */
+router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
+  try {
+    const { id: communityId, postId } = req.params;
+    const userId = req.session.userId;
+    const { optionIndex } = req.body;
+
+    if (typeof optionIndex !== "number") {
+      return res
+        .status(400)
+        .json({ ok: false, error: "optionIndex is required." });
+    }
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "Community not found" });
+    }
+
+    const post = await CommunityPost.findOne({
+      _id: postId,
+      community: communityId,
+    }).exec();
+
+    if (!post || post.type !== "poll" || !post.poll) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "This post is not a poll." });
+    }
+
+    if (
+      optionIndex < 0 ||
+      optionIndex >= post.poll.options.length
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid poll option.",
+      });
+    }
+
+    // must be a member to vote
+    const membership = await CommunityMembership.findOne({
+      user: userId,
+      community: communityId,
+    }).exec();
+
+    if (!membership) {
+      return res.status(403).json({
+        ok: false,
+        error: "You must join this community to participate in polls.",
+      });
+    }
+
+    // Voting logic
+    if (!post.poll.allowMultiple) {
+      // Remove any existing votes by this user on this post
+      await CommunityPollVote.deleteMany({ post: post._id, user: userId });
+    }
+
+    // Upsert (avoid duplicate)
+    await CommunityPollVote.updateOne(
+      { post: post._id, user: userId, optionIndex },
+      { $set: { post: post._id, user: userId, optionIndex } },
+      { upsert: true }
+    );
+
+    // Recalculate results to return
+    const votes = await CommunityPollVote.find({ post: post._id }).exec();
+    const counts = Array(post.poll.options.length).fill(0);
+    votes.forEach((v) => {
+      if (v.optionIndex >= 0 && v.optionIndex < counts.length) {
+        counts[v.optionIndex]++;
+      }
+    });
+
+    const totalVotes = counts.reduce((a, b) => a + b, 0);
+    const myVotes = votes
+      .filter((v) => String(v.user) === String(userId))
+      .map((v) => v.optionIndex);
+
+    return res.json({
+      ok: true,
+      pollResults: { counts, totalVotes },
+      myVotes,
+    });
+  } catch (err) {
+    console.error("[poll vote error]", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /community/:id/posts/:postId/replies
+ */
+router.get("/:id/posts/:postId/replies", async (req, res) => {
+  try {
+    const { id: communityId, postId } = req.params;
+
+    const post = await CommunityPost.findOne({
+      _id: postId,
+      community: communityId,
+    }).exec();
+
+    if (!post) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "Post not found" });
+    }
+
+    const replies = await CommunityReply.find({ post: post._id })
+      .sort({ createdAt: 1 })
+      .populate("author", "username firstName lastName")
+      .exec();
+
+    const result = replies.map((r) => {
+      const fullName = r.author
+        ? [r.author.firstName, r.author.lastName]
+          .filter(Boolean)
+          .join(" ")
+        : null;
+      return {
+        id: r._id,
+        body: r.body,
+        author: fullName || r.author?.username || "Unknown",
+        createdAt: r.createdAt,
+      };
+    });
+
+    return res.json({ ok: true, replies: result });
+  } catch (err) {
+    console.error("[get post replies error]", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /community/:id/posts/:postId/replies
+ * Body: { body }
+ */
+router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
+  try {
+    const { id: communityId, postId } = req.params;
+    const userId = req.session.userId;
+    const { body } = req.body || {};
+
+    if (!body || !body.trim()) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Reply body is required." });
+    }
+
+    const post = await CommunityPost.findOne({
+      _id: postId,
+      community: communityId,
+    }).exec();
+
+    if (!post) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "Post not found" });
+    }
+
+    // must be a member to reply
+    const membership = await CommunityMembership.findOne({
+      user: userId,
+      community: communityId,
+    }).exec();
+
+    if (!membership) {
+      return res.status(403).json({
+        ok: false,
+        error: "You must join this community before replying.",
+      });
+    }
+
+    const reply = await CommunityReply.create({
+      post: post._id,
+      author: userId,
+      body: body.trim(),
+    });
+
+    // Update post counters
+    post.replyCount = (post.replyCount || 0) + 1;
+    post.lastReplyAt = reply.createdAt;
+    await post.save();
+
+    return res.status(201).json({
+      ok: true,
+      reply: {
+        id: reply._id,
+        body: reply.body,
+        createdAt: reply.createdAt,
+      },
+    });
+  } catch (err) {
+    console.error("[create post reply error]", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Internal server error" });
+  }
+});
 
 
 
