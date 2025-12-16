@@ -222,4 +222,33 @@ router.post("/:id/act", requireAuth, async (req, res) => {
   }
 });
 
+// DELETE /notifications/:id  (delete one)
+router.delete("/:id", requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const { id } = req.params;
+
+    console.log("🔥 DELETE route hit", id);
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ ok: false, error: "Invalid notification id" });
+    }
+
+    const deleted = await Notification.findOneAndDelete({
+      _id: id,
+      user: userId,
+    }).lean();
+
+    if (!deleted) {
+      return res.status(404).json({ ok: false, error: "Notification not found" });
+    }
+
+    return res.json({ ok: true, deletedId: id });
+  } catch (err) {
+    console.error("[notification delete-one error]", err);
+    return res.status(500).json({ ok: false, error: "Unable to delete notification" });
+  }
+});
+
+
 module.exports = router;
