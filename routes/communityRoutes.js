@@ -41,6 +41,16 @@ const upload = multer({
   },
 });
 
+// ---- Activity helper ----
+const bumpCommunityActivity = async (communityId) => {
+  if (!communityId) return;
+  await Community.updateOne(
+    { _id: communityId },
+    { $set: { lastActivityAt: new Date() } }
+  );
+};
+
+
 /**
  * POST /community
  * Create a new community (used by CreateCommunity.jsx)
@@ -119,7 +129,9 @@ router.get("/my", requireAuth, async (req, res) => {
           role: m.role,
           my: true,
         };
-      });
+      })
+      .sort((a, b) => new Date(b.lastActivityAt) - new Date(a.lastActivityAt));
+
 
     return res.json({ ok: true, communities });
   } catch (err) {
@@ -130,6 +142,7 @@ router.get("/my", requireAuth, async (req, res) => {
 
 /**
  * GET /community/discover
+ * Return ONLY communities the user is NOT a member of (when logged in)
  */
 router.get("/discover", async (req, res) => {
   try {
@@ -140,77 +153,55 @@ router.get("/discover", async (req, res) => {
 
     if (q) {
       const regex = new RegExp(q.trim(), "i");
-      filter.$or = [
-        { header: regex },
-        { subheader: regex },
-        { content: regex },
-      ];
+      filter.$or = [{ header: regex }, { subheader: regex }, { content: regex }];
     }
 
-    if (type) {
-      filter.type = type;
-    }
+    if (type) filter.type = type;
 
-    if (size === "small") {
-      filter.membersCount = { $gte: 2, $lte: 10 };
-    } else if (size === "medium") {
-      filter.membersCount = { $gte: 11, $lte: 30 };
-    } else if (size === "large") {
-      filter.membersCount = { $gte: 31 };
-    }
+    if (size === "small") filter.membersCount = { $gte: 2, $lte: 10 };
+    else if (size === "medium") filter.membersCount = { $gte: 11, $lte: 30 };
+    else if (size === "large") filter.membersCount = { $gte: 31 };
 
     if (lastActive) {
       const now = new Date();
-      let threshold;
+      let threshold = null;
 
-      if (lastActive === "7d") {
-        threshold = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      } else if (lastActive === "30d") {
-        threshold = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      } else if (lastActive === "90d") {
-        threshold = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-      }
+      if (lastActive === "7d") threshold = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      if (lastActive === "30d") threshold = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      if (lastActive === "90d") threshold = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
 
-      if (threshold) {
-        filter.lastActivityAt = { $gte: threshold };
-      }
+      if (threshold) filter.lastActivityAt = { $gte: threshold };
     }
 
+    // ✅ Exclude communities the user is already in
+    if (userId) {
+      const myMemberships = await CommunityMembership.find({ user: userId })
+        .select("community")
+        .lean();
+
+      const myCommunityIds = myMemberships.map((m) => m.community);
+      if (myCommunityIds.length) {
+        filter._id = { $nin: myCommunityIds };
+      }
+    }
 
     const communities = await Community.find(filter)
       .sort({ lastActivityAt: -1 })
       .limit(50)
       .exec();
 
-    let membershipsByCommunity = {};
-    if (userId) {
-      const memberships = await CommunityMembership.find({
-        user: userId,
-        community: { $in: communities.map((c) => c._id) },
-      }).exec();
-
-      membershipsByCommunity = memberships.reduce((acc, m) => {
-        acc[m.community.toString()] = m.role;
-        return acc;
-      }, {});
-    }
-
-    const result = communities.map((c) => {
-      const role = membershipsByCommunity[c._id.toString()];
-      const isMember = !!role;
-
-      return {
-        id: c._id,
-        header: c.header,
-        subheader: c.subheader,
-        content: c.content,
-        type: c.type,
-        members: c.membersCount,
-        lastActivityAt: c.lastActivityAt,
-        role: role || null,
-        my: isMember,
-      };
-    });
+    // Since these are "discover", user is not a member (when logged in)
+    const result = communities.map((c) => ({
+      id: c._id,
+      header: c.header,
+      subheader: c.subheader,
+      content: c.content,
+      type: c.type,
+      members: c.membersCount,
+      lastActivityAt: c.lastActivityAt,
+      role: null,
+      my: false,
+    }));
 
     return res.json({ ok: true, communities: result });
   } catch (err) {
@@ -218,6 +209,7 @@ router.get("/discover", async (req, res) => {
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
+
 
 // GET /community/:id
 // Detailed community view for CommunityInfo page
@@ -426,7 +418,7 @@ const toSubtitle = (body) => {
  * GET /community/:id/posts
  * List posts for a specific community
  */
-router.get("/:id/posts", async (req, res) => {
+router.get("/:id/posts", requireAuth, async (req, res) => {
   try {
     const { id: communityId } = req.params;
 
@@ -535,10 +527,7 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
         : {}),
     });
 
-
-    // update community lastActivityAt
-    community.lastActivityAt = new Date();
-    await community.save();
+    await bumpCommunityActivity(communityId);
 
     const safeBody = body || "";
 
@@ -838,6 +827,8 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
       { upsert: true }
     );
 
+    await bumpCommunityActivity(communityId);
+
     // Recalculate results to return
     const votes = await CommunityPollVote.find({ post: post._id }).exec();
     const counts = Array(post.poll.options.length).fill(0);
@@ -868,7 +859,7 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
 /**
  * GET /community/:id/posts/:postId/replies
  */
-router.get("/:id/posts/:postId/replies", async (req, res) => {
+router.get("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
   try {
     const { id: communityId, postId } = req.params;
 
@@ -961,6 +952,8 @@ router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
     post.replyCount = (post.replyCount || 0) + 1;
     post.lastReplyAt = reply.createdAt;
     await post.save();
+
+    await bumpCommunityActivity(communityId);
 
     return res.status(201).json({
       ok: true,
