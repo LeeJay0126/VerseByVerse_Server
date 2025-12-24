@@ -12,6 +12,7 @@ const userRoutes = require("./routes/UserRoutes");
 const passageRoutes = require("./routes/KorProxy");
 const communityRoutes = require("./routes/communityRoutes");
 const notificationRoutes = require("./routes/NotificationRoutes");
+const notesRoutes = require("./routes/noteRoutes");
 
 const {
   PORT = 4000,
@@ -39,14 +40,13 @@ app.use((req, res, next) => {
   next();
 });
 
-
 /* ---------- middleware ---------- */
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
 
 const corsOptions = {
-  origin: "http://localhost:3000",
+  origin: CLIENT_ORIGIN,         
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "X-Requested-With"],
@@ -55,10 +55,11 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Explicit preflight for the routes
+
+// Explicit preflight (optional, but fine)
 app.options("/notifications", cors(corsOptions));
 app.options("/notifications/:id", cors(corsOptions));
-
+app.options("/notes", cors(corsOptions));
 
 app.set("trust proxy", 1);
 
@@ -89,6 +90,7 @@ app.use("/auth", userRoutes);
 app.use("/api", passageRoutes);
 app.use("/community", communityRoutes);
 app.use("/notifications", notificationRoutes);
+app.use("/notes", notesRoutes);
 
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
