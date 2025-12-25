@@ -36,33 +36,36 @@ if (!MONGO_URI) {
 const app = express();
 
 app.use((req, res, next) => {
-  res.setHeader("X-CORS-SERVER", "v1-delete-enabled");
+  res.setHeader("X-SERVER-FINGERPRINT", "v1-notes-cors-debug");
   next();
 });
 
+
+const corsOptions = {
+  origin: CLIENT_ORIGIN,
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+};
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
+
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") {
+    console.log("❌ OPTIONS fell through:", req.originalUrl);
+  }
+  next();
+});
+
+
 /* ---------- middleware ---------- */
+
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
 
-const corsOptions = {
-  origin: CLIENT_ORIGIN,         
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "X-Requested-With"],
-  optionsSuccessStatus: 204,
-};
-
-app.use(cors(corsOptions));
-
-
-// Explicit preflight (optional, but fine)
-app.options("/notifications", cors(corsOptions));
-app.options("/notifications/:id", cors(corsOptions));
-app.options("/notes", cors(corsOptions));
-
 app.set("trust proxy", 1);
 
+/* ---------- session ---------- */
 app.use(
   session({
     name: "connect.sid",
@@ -94,6 +97,7 @@ app.use("/notes", notesRoutes);
 
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
+/* ---------- error handler ---------- */
 app.use((err, _req, res, _next) => {
   console.error("[unhandled error]", err);
   res.status(500).json({ ok: false, error: err.message });
