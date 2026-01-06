@@ -8,8 +8,8 @@ const NoteSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    bibleId: { type: String, required: true },
-    chapterId: { type: String, required: true },
+    bibleId: { type: String, required: true, index: true },
+    chapterId: { type: String, required: true, index: true },
 
     rangeStart: { type: Number, default: null },
     rangeEnd: { type: Number, default: null },
@@ -20,10 +20,6 @@ const NoteSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// unique per user + passage scope (+ range)
-NoteSchema.index(
-  { user: 1, bibleId: 1, chapterId: 1, rangeStart: 1, rangeEnd: 1 },
-  { unique: true }
-);
+NoteSchema.index({ user: 1, updatedAt: -1 });
 
 module.exports = mongoose.model("Note", NoteSchema);
