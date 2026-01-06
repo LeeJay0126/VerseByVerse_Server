@@ -86,7 +86,9 @@ router.get("/exists", requireAuth, async (req, res) => {
     const { bibleId, chapterId } = req.query;
 
     if (!bibleId || !chapterId) {
-      return res.status(400).json({ ok: false, error: "Missing bibleId or chapterId" });
+      return res
+        .status(400)
+        .json({ ok: false, error: "Missing bibleId or chapterId" });
     }
 
     const exists = await Note.exists({ user: userId, bibleId, chapterId });
@@ -160,7 +162,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
 
 /**
  * GET /notes?bibleId=&chapterId=&rangeStart=&rangeEnd=
- * range-scoped fetch
+ * Returns the most recently updated note for that scope (if any).
  */
 router.get("/", requireAuth, async (req, res) => {
   try {
@@ -177,7 +179,9 @@ router.get("/", requireAuth, async (req, res) => {
       chapterId,
       rangeStart: toNullOrNumber(rangeStart),
       rangeEnd: toNullOrNumber(rangeEnd),
-    }).lean();
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
 
     return res.json({ ok: true, note: note || null });
   } catch (e) {
@@ -187,9 +191,9 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 /**
- * PUT /notes  (range-key upsert)
+ * POST /notes (create new note, NEVER overwrite)
  */
-router.put("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth, async (req, res) => {
   try {
     const userId = req.session.userId;
     const { bibleId, chapterId, rangeStart, rangeEnd, title = "", text = "" } = req.body || {};
@@ -201,25 +205,26 @@ router.put("/", requireAuth, async (req, res) => {
     const cleanTitle = safeStr(title, 120);
     const cleanText = safeStr(text, 50000);
 
-    const note = await Note.findOneAndUpdate(
-      {
-        user: userId,
-        bibleId,
-        chapterId,
-        rangeStart: toNullOrNumber(rangeStart),
-        rangeEnd: toNullOrNumber(rangeEnd),
-      },
-      { $set: { title: cleanTitle, text: cleanText } },
-      { new: true, upsert: true }
-    ).lean();
+    const note = await Note.create({
+      user: userId,
+      bibleId,
+      chapterId,
+      rangeStart: toNullOrNumber(rangeStart),
+      rangeEnd: toNullOrNumber(rangeEnd),
+      title: cleanTitle,
+      text: cleanText,
+    });
 
-    return res.json({ ok: true, note });
+    return res.status(201).json({ ok: true, note });
   } catch (e) {
     if (e?.code === 11000) {
-      return res.status(409).json({ ok: false, error: "Duplicate note key" });
+      return res.status(409).json({
+        ok: false,
+        error: "Duplicate note key (drop the unique index to allow multiple notes per chapter/range).",
+      });
     }
     console.error(e);
-    return res.status(500).json({ ok: false, error: "Failed to save note" });
+    return res.status(500).json({ ok: false, error: "Failed to create note" });
   }
 });
 
