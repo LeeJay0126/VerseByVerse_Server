@@ -16,7 +16,7 @@ const buildPreview = (text) =>
   safeStr(text, 50000).replace(/\s+/g, " ").trim().slice(0, 160);
 
 /**
- * GET /notes/list?q=&bibleId=&bookId=&sort=updatedAt:desc&limit=&offset=
+ * GET /notes/list?q=&bibleId=&bookId=&chapterId=&sort=updatedAt:desc&limit=&offset=
  */
 router.get("/list", requireAuth, async (req, res) => {
   try {
@@ -26,14 +26,17 @@ router.get("/list", requireAuth, async (req, res) => {
       q = "",
       bibleId = "",
       bookId = "",
+      chapterId = "",
       sort = "updatedAt:desc",
       limit = "50",
       offset = "0",
     } = req.query;
 
     const [fieldRaw, dirRaw] = String(sort).split(":");
-    const field = fieldRaw === "title" ? "title" : "updatedAt";
     const dir = dirRaw === "asc" ? 1 : -1;
+
+    const fieldWhitelist = new Set(["title", "updatedAt", "createdAt", "chapterId"]);
+    const field = fieldWhitelist.has(fieldRaw) ? fieldRaw : "updatedAt";
 
     const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
     const off = Math.max(parseInt(offset, 10) || 0, 0);
@@ -42,7 +45,10 @@ router.get("/list", requireAuth, async (req, res) => {
 
     if (bibleId) filter.bibleId = bibleId;
 
-    if (bookId) {
+    // Scope filters
+    if (chapterId) {
+      filter.chapterId = chapterId; // exact chapter
+    } else if (bookId) {
       // chapterId format: "GEN.1" -> starts with "GEN."
       filter.chapterId = { $regex: `^${bookId}\\.` };
     }
@@ -57,8 +63,28 @@ router.get("/list", requireAuth, async (req, res) => {
 
     const total = await Note.countDocuments(filter);
 
+    // Build sort object (with secondary keys when sorting by chapter)
+    let sortObj = { [field]: dir };
+
+    if (field === "chapterId") {
+      // group by chapter, then rangeStart (nulls first-ish), then most recently updated
+      sortObj = {
+        chapterId: dir,
+        rangeStart: 1,
+        rangeEnd: 1,
+        updatedAt: -1,
+      };
+    } else if (field === "title") {
+      sortObj = { title: dir, updatedAt: -1 };
+    } else if (field === "createdAt") {
+      sortObj = { createdAt: dir, updatedAt: -1 };
+    } else {
+      // updatedAt
+      sortObj = { updatedAt: dir, createdAt: -1 };
+    }
+
     const notes = await Note.find(filter)
-      .sort({ [field]: dir })
+      .sort(sortObj)
       .skip(off)
       .limit(lim)
       .select("bibleId chapterId rangeStart rangeEnd title text updatedAt createdAt")
