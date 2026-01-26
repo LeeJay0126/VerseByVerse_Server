@@ -1,4 +1,3 @@
-// models/CommunityReply.js
 const mongoose = require("mongoose");
 
 const CommunityReplySchema = new mongoose.Schema(
@@ -7,6 +6,11 @@ const CommunityReplySchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "CommunityPost",
       required: true,
+    },
+    parentReply: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CommunityReply",
+      default: null,
     },
     author: {
       type: mongoose.Schema.Types.ObjectId,
@@ -21,5 +25,7 @@ const CommunityReplySchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+CommunityReplySchema.index({ post: 1, parentReply: 1, createdAt: 1 });
 
 module.exports = mongoose.model("CommunityReply", CommunityReplySchema);

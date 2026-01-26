@@ -13,7 +13,6 @@ const CommunityPollVote = require("../models/CommunityPollVote");
 
 const router = express.Router();
 
-// ---- Multer setup for hero images ----
 const heroUploadDir = path.join(__dirname, "..", "uploads", "community-heroes");
 if (!fs.existsSync(heroUploadDir)) {
   fs.mkdirSync(heroUploadDir, { recursive: true });
@@ -32,7 +31,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith("image/")) {
       return cb(new Error("Only image files are allowed"));
@@ -41,7 +40,6 @@ const upload = multer({
   },
 });
 
-// ---- Activity helper ----
 const bumpCommunityActivity = async (communityId) => {
   if (!communityId) return;
   await Community.updateOne(
@@ -50,20 +48,13 @@ const bumpCommunityActivity = async (communityId) => {
   );
 };
 
-
-/**
- * POST /community
- * Create a new community (used by CreateCommunity.jsx)
- */
 router.post("/", requireAuth, async (req, res) => {
   try {
     const { header, subheader, content, type } = req.body || {};
     const userId = req.session.userId;
 
     if (!header || !subheader || !content || !type) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Missing required fields" });
+      return res.status(400).json({ ok: false, error: "Missing required fields" });
     }
 
     const community = await Community.create({
@@ -102,10 +93,6 @@ router.post("/", requireAuth, async (req, res) => {
   }
 });
 
-/**
- * GET /community/my
- * List communities the current user belongs to (My Communities tab)
- */
 router.get("/my", requireAuth, async (req, res) => {
   try {
     const userId = req.session.userId;
@@ -132,7 +119,6 @@ router.get("/my", requireAuth, async (req, res) => {
       })
       .sort((a, b) => new Date(b.lastActivityAt) - new Date(a.lastActivityAt));
 
-
     return res.json({ ok: true, communities });
   } catch (err) {
     console.error("[my communities error]", err);
@@ -140,10 +126,6 @@ router.get("/my", requireAuth, async (req, res) => {
   }
 });
 
-/**
- * GET /community/discover
- * Return ONLY communities the user is NOT a member of (when logged in)
- */
 router.get("/discover", async (req, res) => {
   try {
     const userId = req.session?.userId || null;
@@ -173,7 +155,6 @@ router.get("/discover", async (req, res) => {
       if (threshold) filter.lastActivityAt = { $gte: threshold };
     }
 
-    // ✅ Exclude communities the user is already in
     if (userId) {
       const myMemberships = await CommunityMembership.find({ user: userId })
         .select("community")
@@ -190,7 +171,6 @@ router.get("/discover", async (req, res) => {
       .limit(50)
       .exec();
 
-    // Since these are "discover", user is not a member (when logged in)
     const result = communities.map((c) => ({
       id: c._id,
       header: c.header,
@@ -210,9 +190,6 @@ router.get("/discover", async (req, res) => {
   }
 });
 
-
-// GET /community/:id
-// Detailed community view for CommunityInfo page
 router.get("/:id", async (req, res) => {
   try {
     const { id: communityId } = req.params;
@@ -225,19 +202,13 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ ok: false, error: "Community not found" });
     }
 
-    // Get all memberships for this community
-    const memberships = await CommunityMembership.find({
-      community: communityId,
-    })
+    const memberships = await CommunityMembership.find({ community: communityId })
       .populate("user", "username firstName lastName")
       .exec();
 
     const toUserSummary = (userDoc) => {
       if (!userDoc) return null;
-      const fullName = [userDoc.firstName, userDoc.lastName]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
+      const fullName = [userDoc.firstName, userDoc.lastName].filter(Boolean).join(" ").trim();
       return {
         id: userDoc._id,
         username: userDoc.username || fullName || "Unknown",
@@ -246,14 +217,10 @@ router.get("/:id", async (req, res) => {
     };
 
     const ownerSummary = community.owner ? toUserSummary(community.owner) : null;
-    const leaderMemberships = memberships.filter(
-      (m) => m.role === "Leader" && m.user
-    );
-    const leaders = leaderMemberships
-      .map((m) => toUserSummary(m.user))
-      .filter(Boolean);
 
-    // Members list (everyone except Owner)
+    const leaderMemberships = memberships.filter((m) => m.role === "Leader" && m.user);
+    const leaders = leaderMemberships.map((m) => toUserSummary(m.user)).filter(Boolean);
+
     const memberSummaries = memberships
       .filter((m) => m.user)
       .map((m) => ({
@@ -271,7 +238,7 @@ router.get("/:id", async (req, res) => {
         type: community.type,
         membersCount: community.membersCount,
         lastActivityAt: community.lastActivityAt,
-        heroImageUrl: community.heroImageUrl || null,  // 👈 add this
+        heroImageUrl: community.heroImageUrl || null,
         owner: ownerSummary,
         leaders,
         members: memberSummaries,
@@ -279,18 +246,10 @@ router.get("/:id", async (req, res) => {
     });
   } catch (err) {
     console.error("[get community detail error]", err);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Internal server error" });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
-
-/**
- * POST /community/:id/invite
- * Body: { userId: "..." }
- * Owner/Leader invites someone
- */
 router.post("/:id/invite", requireAuth, async (req, res) => {
   try {
     const { id: communityId } = req.params;
@@ -302,7 +261,6 @@ router.post("/:id/invite", requireAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: "Community not found" });
     }
 
-    // Check inviter is Owner or Leader in this community
     const inviterMembership = await CommunityMembership.findOne({
       user: inviterId,
       community: communityId,
@@ -315,23 +273,14 @@ router.post("/:id/invite", requireAuth, async (req, res) => {
       });
     }
 
-    const inviter = await User.findById(inviterId)
-      .select("firstName lastName")
-      .exec();
-    const invitee = await User.findById(inviteeId)
-      .select("firstName lastName email")
-      .exec();
+    const inviter = await User.findById(inviterId).select("firstName lastName").exec();
+    const invitee = await User.findById(inviteeId).select("firstName lastName email").exec();
 
     if (!invitee) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "User to invite not found" });
+      return res.status(404).json({ ok: false, error: "User to invite not found" });
     }
 
-    const inviterName = inviter
-      ? `${inviter.firstName} ${inviter.lastName}`
-      : "Someone";
-
+    const inviterName = inviter ? `${inviter.firstName} ${inviter.lastName}` : "Someone";
     const message = `${inviterName} has invited you to join ${community.header}.`;
 
     await createNotification({
@@ -345,39 +294,26 @@ router.post("/:id/invite", requireAuth, async (req, res) => {
     return res.json({ ok: true });
   } catch (err) {
     console.error("[community invite error]", err);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Internal server error" });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
-/**
- * POST /community/:id/request-join
- * Authenticated user requests to join a community
- */
 router.post("/:id/request-join", requireAuth, async (req, res) => {
   try {
     const { id: communityId } = req.params;
     const requesterId = req.session.userId;
 
-    const community = await Community.findById(communityId)
-      .populate("owner")
-      .exec();
+    const community = await Community.findById(communityId).populate("owner").exec();
     if (!community) {
       return res.status(404).json({ ok: false, error: "Community not found" });
     }
 
-    const requester = await User.findById(requesterId)
-      .select("firstName lastName")
-      .exec();
-    const requesterName = requester
-      ? `${requester.firstName} ${requester.lastName}`
-      : "A user";
-
+    const requester = await User.findById(requesterId).select("firstName lastName").exec();
+    const requesterName = requester ? `${requester.firstName} ${requester.lastName}` : "A user";
     const message = `${requesterName} has requested to join ${community.header}.`;
 
     await createNotification({
-      user: community.owner, // receiver (owner)
+      user: community.owner,
       type: "COMMUNITY_JOIN_REQUEST",
       message,
       community: community._id,
@@ -387,9 +323,7 @@ router.post("/:id/request-join", requireAuth, async (req, res) => {
     return res.json({ ok: true });
   } catch (err) {
     console.error("[community join-request error]", err);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Internal server error" });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
@@ -406,7 +340,6 @@ const mapTypeToClass = (type) => {
   }
 };
 
-
 const toSubtitle = (body) => {
   if (!body) return "";
   const trimmed = body.trim();
@@ -414,10 +347,6 @@ const toSubtitle = (body) => {
   return trimmed.slice(0, 137) + "...";
 };
 
-/**
- * GET /community/:id/posts
- * List posts for a specific community
- */
 router.get("/:id/posts", requireAuth, async (req, res) => {
   try {
     const { id: communityId } = req.params;
@@ -433,9 +362,7 @@ router.get("/:id/posts", requireAuth, async (req, res) => {
       .exec();
 
     const result = posts.map((p) => {
-      const fullName = p.author
-        ? [p.author.firstName, p.author.lastName].filter(Boolean).join(" ")
-        : null;
+      const fullName = p.author ? [p.author.firstName, p.author.lastName].filter(Boolean).join(" ") : null;
 
       return {
         id: p._id,
@@ -445,10 +372,10 @@ router.get("/:id/posts", requireAuth, async (req, res) => {
           p.type === "questions"
             ? "Questions"
             : p.type === "announcements"
-              ? "Announcements"
-              : p.type === "poll"
-                ? "Poll"
-                : "General",
+            ? "Announcements"
+            : p.type === "poll"
+            ? "Poll"
+            : "General",
         categoryClass: mapTypeToClass(p.type),
         replyCount: p.replyCount || 0,
         activityText: p.updatedAt || p.createdAt,
@@ -465,27 +392,18 @@ router.get("/:id/posts", requireAuth, async (req, res) => {
   }
 });
 
-/**
- * POST /community/:id/posts
- * Create a new post in a community (must be a member)
- */
 router.post("/:id/posts", requireAuth, async (req, res) => {
   try {
     const { id: communityId } = req.params;
     const userId = req.session.userId;
     const { title, body, type } = req.body || {};
 
-    const normalizedType =
-      ["general", "questions", "announcements", "poll"].includes(
-        (type || "").toLowerCase()
-      )
-        ? type.toLowerCase()
-        : "general";
+    const normalizedType = ["general", "questions", "announcements", "poll"].includes((type || "").toLowerCase())
+      ? type.toLowerCase()
+      : "general";
 
     if (!title || (!body && normalizedType !== "poll")) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Title and body are required." });
+      return res.status(400).json({ ok: false, error: "Title and body are required." });
     }
 
     const community = await Community.findById(communityId).exec();
@@ -493,18 +411,13 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: "Community not found" });
     }
 
-    const membership = await CommunityMembership.findOne({
-      user: userId,
-      community: communityId,
-    }).exec();
-
+    const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership) {
       return res.status(403).json({
         ok: false,
         error: "You must join this community before posting.",
       });
     }
-
 
     const pollConfig = req.body.poll;
 
@@ -516,14 +429,14 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
       type: normalizedType,
       ...(normalizedType === "poll" && pollConfig
         ? {
-          poll: {
-            options: (pollConfig.options || [])
-              .map((text) => ({ text: String(text).trim() }))
-              .filter((o) => o.text),
-            allowMultiple: !!pollConfig.allowMultiple,
-            anonymous: pollConfig.anonymous !== false, // default true
-          },
-        }
+            poll: {
+              options: (pollConfig.options || [])
+                .map((text) => ({ text: String(text).trim() }))
+                .filter((o) => o.text),
+              allowMultiple: !!pollConfig.allowMultiple,
+              anonymous: pollConfig.anonymous !== false,
+            },
+          }
         : {}),
     });
 
@@ -534,16 +447,15 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     const responsePost = {
       id: post._id,
       title: post.title,
-      subtitle:
-        safeBody.length > 140 ? safeBody.slice(0, 137) + "..." : safeBody,
+      subtitle: safeBody.length > 140 ? safeBody.slice(0, 137) + "..." : safeBody,
       category:
         normalizedType === "questions"
           ? "Questions"
           : normalizedType === "announcements"
-            ? "Announcements"
-            : normalizedType === "poll"
-              ? "Poll"
-              : "General",
+          ? "Announcements"
+          : normalizedType === "poll"
+          ? "Poll"
+          : "General",
       categoryClass: mapTypeToClass(normalizedType),
       replyCount: 0,
       activityText: post.createdAt,
@@ -551,33 +463,21 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
       updatedAt: post.updatedAt,
     };
 
-
-    // --- Notify Owner & Leaders about new post ---
     try {
-      const memberships = await CommunityMembership.find({
-        community: communityId,
-      })
+      const memberships = await CommunityMembership.find({ community: communityId })
         .populate("user", "firstName lastName")
         .exec();
 
-      const author = memberships.find(
-        (m) => String(m.user?._id) === String(userId)
-      );
+      const author = memberships.find((m) => String(m.user?._id) === String(userId));
 
       const authorName = author?.user
-        ? [author.user.firstName, author.user.lastName]
-          .filter(Boolean)
-          .join(" ")
+        ? [author.user.firstName, author.user.lastName].filter(Boolean).join(" ")
         : "A member";
 
       const message = `${authorName} posted “${post.title}” in ${community.header}.`;
 
       const recipients = memberships
-        .filter(
-          (m) =>
-            ["Owner", "Leader"].includes(m.role) &&
-            String(m.user?._id) !== String(userId)
-        )
+        .filter((m) => ["Owner", "Leader"].includes(m.role) && String(m.user?._id) !== String(userId))
         .map((m) => m.user?._id)
         .filter(Boolean);
 
@@ -595,7 +495,6 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
       }
     } catch (notifyErr) {
       console.error("[create community post notification error]", notifyErr);
-      // don't fail the request just because notifications failed
     }
 
     return res.status(201).json({ ok: true, post: responsePost });
@@ -605,67 +504,39 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
   }
 });
 
-/**
- * POST /community/:id/hero-image
- * Upload or update the hero background image
- */
-router.post(
-  "/:id/hero-image",
-  requireAuth,
-  upload.single("heroImage"),
-  async (req, res) => {
-    try {
-      const { id: communityId } = req.params;
-      const userId = req.session.userId;
+router.post("/:id/hero-image", requireAuth, upload.single("heroImage"), async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+    const userId = req.session.userId;
 
-      const community = await Community.findById(communityId).exec();
-      if (!community) {
-        return res
-          .status(404)
-          .json({ ok: false, error: "Community not found" });
-      }
-
-      // Check that user is Owner or Leader
-      const membership = await CommunityMembership.findOne({
-        user: userId,
-        community: communityId,
-      }).exec();
-
-      if (!membership || !["Owner", "Leader"].includes(membership.role)) {
-        return res.status(403).json({
-          ok: false,
-          error: "You do not have permission to update this hero image.",
-        });
-      }
-
-      if (!req.file) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "No file uploaded." });
-      }
-
-      // Build public URL
-      const relativePath = `/uploads/community-heroes/${req.file.filename}`;
-      community.heroImageUrl = relativePath;
-      await community.save();
-
-      return res.json({
-        ok: true,
-        heroImageUrl: relativePath,
-      });
-    } catch (err) {
-      console.error("[update community hero image error]", err);
-      return res
-        .status(500)
-        .json({ ok: false, error: "Internal server error" });
+    const community = await Community.findById(communityId).exec();
+    if (!community) {
+      return res.status(404).json({ ok: false, error: "Community not found" });
     }
-  }
-);
 
-/**
- * GET /community/:id/posts/:postId
- * Get a single post with basic community info
- */
+    const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
+    if (!membership || !["Owner", "Leader"].includes(membership.role)) {
+      return res.status(403).json({
+        ok: false,
+        error: "You do not have permission to update this hero image.",
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "No file uploaded." });
+    }
+
+    const relativePath = `/uploads/community-heroes/${req.file.filename}`;
+    community.heroImageUrl = relativePath;
+    await community.save();
+
+    return res.json({ ok: true, heroImageUrl: relativePath });
+  } catch (err) {
+    console.error("[update community hero image error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
 router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
   try {
     const { id: communityId, postId } = req.params;
@@ -673,15 +544,10 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
 
     const community = await Community.findById(communityId).exec();
     if (!community) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Community not found" });
+      return res.status(404).json({ ok: false, error: "Community not found" });
     }
 
-    const post = await CommunityPost.findOne({
-      _id: postId,
-      community: communityId,
-    })
+    const post = await CommunityPost.findOne({ _id: postId, community: communityId })
       .populate("author", "username firstName lastName")
       .exec();
 
@@ -689,11 +555,8 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: "Post not found" });
     }
 
-    const fullName = post.author
-      ? [post.author.firstName, post.author.lastName].filter(Boolean).join(" ")
-      : null;
+    const fullName = post.author ? [post.author.firstName, post.author.lastName].filter(Boolean).join(" ") : null;
 
-    // --- Poll aggregation ---
     let poll = null;
     let pollResults = null;
     let myVotes = [];
@@ -703,9 +566,7 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
 
       const counts = Array(post.poll.options.length).fill(0);
       votes.forEach((v) => {
-        if (v.optionIndex >= 0 && v.optionIndex < counts.length) {
-          counts[v.optionIndex]++;
-        }
+        if (v.optionIndex >= 0 && v.optionIndex < counts.length) counts[v.optionIndex]++;
       });
 
       const totalVotes = counts.reduce((a, b) => a + b, 0);
@@ -716,10 +577,7 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
         anonymous: post.poll.anonymous,
       };
 
-      pollResults = {
-        counts,
-        totalVotes,
-      };
+      pollResults = { counts, totalVotes };
 
       myVotes = votes
         .filter((v) => String(v.user) === String(userId))
@@ -751,16 +609,10 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("[get community post detail error]", err);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Internal server error" });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
-/**
- * POST /community/:id/posts/:postId/vote
- * Body: { optionIndex }
- */
 router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
   try {
     const { id: communityId, postId } = req.params;
@@ -793,11 +645,7 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
       });
     }
 
-    const existing = await CommunityPollVote.findOne({
-      post: post._id,
-      user: userId,
-      optionIndex,
-    }).exec();
+    const existing = await CommunityPollVote.findOne({ post: post._id, user: userId, optionIndex }).exec();
 
     if (existing) {
       await CommunityPollVote.deleteOne({ _id: existing._id });
@@ -808,10 +656,9 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
       votes.forEach((v) => {
         if (v.optionIndex >= 0 && v.optionIndex < counts.length) counts[v.optionIndex]++;
       });
+
       const totalVotes = counts.reduce((a, b) => a + b, 0);
-      const myVotes = votes
-        .filter((v) => String(v.user) === String(userId))
-        .map((v) => v.optionIndex);
+      const myVotes = votes.filter((v) => String(v.user) === String(userId)).map((v) => v.optionIndex);
 
       return res.json({ ok: true, pollResults: { counts, totalVotes }, myVotes });
     }
@@ -831,38 +678,22 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
     });
 
     const totalVotes = counts.reduce((a, b) => a + b, 0);
-    const myVotes = votes
-      .filter((v) => String(v.user) === String(userId))
-      .map((v) => v.optionIndex);
+    const myVotes = votes.filter((v) => String(v.user) === String(userId)).map((v) => v.optionIndex);
 
-    return res.json({
-      ok: true,
-      pollResults: { counts, totalVotes },
-      myVotes,
-    });
+    return res.json({ ok: true, pollResults: { counts, totalVotes }, myVotes });
   } catch (err) {
     console.error("[poll vote error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
-
-/**
- * GET /community/:id/posts/:postId/replies
- */
 router.get("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
   try {
     const { id: communityId, postId } = req.params;
 
-    const post = await CommunityPost.findOne({
-      _id: postId,
-      community: communityId,
-    }).exec();
-
+    const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
     if (!post) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Post not found" });
+      return res.status(404).json({ ok: false, error: "Post not found" });
     }
 
     const replies = await CommunityReply.find({ post: post._id })
@@ -871,61 +702,39 @@ router.get("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
       .exec();
 
     const result = replies.map((r) => {
-      const fullName = r.author
-        ? [r.author.firstName, r.author.lastName]
-          .filter(Boolean)
-          .join(" ")
-        : null;
+      const fullName = r.author ? [r.author.firstName, r.author.lastName].filter(Boolean).join(" ") : null;
       return {
         id: r._id,
         body: r.body,
         author: fullName || r.author?.username || "Unknown",
         createdAt: r.createdAt,
+        parentReplyId: r.parentReply ? String(r.parentReply) : null,
       };
     });
 
     return res.json({ ok: true, replies: result });
   } catch (err) {
     console.error("[get post replies error]", err);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Internal server error" });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
-/**
- * POST /community/:id/posts/:postId/replies
- * Body: { body }
- */
 router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
   try {
     const { id: communityId, postId } = req.params;
     const userId = req.session.userId;
-    const { body } = req.body || {};
+    const { body, parentReplyId } = req.body || {};
 
     if (!body || !body.trim()) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Reply body is required." });
+      return res.status(400).json({ ok: false, error: "Reply body is required." });
     }
 
-    const post = await CommunityPost.findOne({
-      _id: postId,
-      community: communityId,
-    }).exec();
-
+    const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
     if (!post) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Post not found" });
+      return res.status(404).json({ ok: false, error: "Post not found" });
     }
 
-    // must be a member to reply
-    const membership = await CommunityMembership.findOne({
-      user: userId,
-      community: communityId,
-    }).exec();
-
+    const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership) {
       return res.status(403).json({
         ok: false,
@@ -933,13 +742,22 @@ router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
       });
     }
 
+    let parentReply = null;
+
+    if (parentReplyId) {
+      parentReply = await CommunityReply.findOne({ _id: parentReplyId, post: post._id }).exec();
+      if (!parentReply) {
+        return res.status(400).json({ ok: false, error: "Invalid parent reply." });
+      }
+    }
+
     const reply = await CommunityReply.create({
       post: post._id,
+      parentReply: parentReply ? parentReply._id : null,
       author: userId,
       body: body.trim(),
     });
 
-    // Update post counters
     post.replyCount = (post.replyCount || 0) + 1;
     post.lastReplyAt = reply.createdAt;
     await post.save();
@@ -952,17 +770,13 @@ router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
         id: reply._id,
         body: reply.body,
         createdAt: reply.createdAt,
+        parentReplyId: reply.parentReply ? String(reply.parentReply) : null,
       },
     });
   } catch (err) {
     console.error("[create post reply error]", err);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Internal server error" });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
-
-
-
 
 module.exports = router;
