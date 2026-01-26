@@ -768,45 +768,24 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
     const { optionIndex } = req.body;
 
     if (typeof optionIndex !== "number") {
-      return res
-        .status(400)
-        .json({ ok: false, error: "optionIndex is required." });
+      return res.status(400).json({ ok: false, error: "optionIndex is required." });
     }
 
     const community = await Community.findById(communityId).exec();
     if (!community) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Community not found" });
+      return res.status(404).json({ ok: false, error: "Community not found" });
     }
 
-    const post = await CommunityPost.findOne({
-      _id: postId,
-      community: communityId,
-    }).exec();
-
+    const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
     if (!post || post.type !== "poll" || !post.poll) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "This post is not a poll." });
+      return res.status(400).json({ ok: false, error: "This post is not a poll." });
     }
 
-    if (
-      optionIndex < 0 ||
-      optionIndex >= post.poll.options.length
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid poll option.",
-      });
+    if (optionIndex < 0 || optionIndex >= post.poll.options.length) {
+      return res.status(400).json({ ok: false, error: "Invalid poll option." });
     }
 
-    // must be a member to vote
-    const membership = await CommunityMembership.findOne({
-      user: userId,
-      community: communityId,
-    }).exec();
-
+    const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership) {
       return res.status(403).json({
         ok: false,
@@ -814,28 +793,41 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
       });
     }
 
-    // Voting logic
+    const existing = await CommunityPollVote.findOne({
+      post: post._id,
+      user: userId,
+      optionIndex,
+    }).exec();
+
+    if (existing) {
+      await CommunityPollVote.deleteOne({ _id: existing._id });
+      await bumpCommunityActivity(communityId);
+
+      const votes = await CommunityPollVote.find({ post: post._id }).exec();
+      const counts = Array(post.poll.options.length).fill(0);
+      votes.forEach((v) => {
+        if (v.optionIndex >= 0 && v.optionIndex < counts.length) counts[v.optionIndex]++;
+      });
+      const totalVotes = counts.reduce((a, b) => a + b, 0);
+      const myVotes = votes
+        .filter((v) => String(v.user) === String(userId))
+        .map((v) => v.optionIndex);
+
+      return res.json({ ok: true, pollResults: { counts, totalVotes }, myVotes });
+    }
+
     if (!post.poll.allowMultiple) {
-      // Remove any existing votes by this user on this post
       await CommunityPollVote.deleteMany({ post: post._id, user: userId });
     }
 
-    // Upsert (avoid duplicate)
-    await CommunityPollVote.updateOne(
-      { post: post._id, user: userId, optionIndex },
-      { $set: { post: post._id, user: userId, optionIndex } },
-      { upsert: true }
-    );
+    await CommunityPollVote.create({ post: post._id, user: userId, optionIndex });
 
     await bumpCommunityActivity(communityId);
 
-    // Recalculate results to return
     const votes = await CommunityPollVote.find({ post: post._id }).exec();
     const counts = Array(post.poll.options.length).fill(0);
     votes.forEach((v) => {
-      if (v.optionIndex >= 0 && v.optionIndex < counts.length) {
-        counts[v.optionIndex]++;
-      }
+      if (v.optionIndex >= 0 && v.optionIndex < counts.length) counts[v.optionIndex]++;
     });
 
     const totalVotes = counts.reduce((a, b) => a + b, 0);
@@ -850,11 +842,10 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("[poll vote error]", err);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Internal server error" });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
+
 
 /**
  * GET /community/:id/posts/:postId/replies
