@@ -19,9 +19,7 @@ if (!fs.existsSync(heroUploadDir)) {
 }
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, heroUploadDir);
-  },
+  destination: (req, file, cb) => cb(null, heroUploadDir),
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname) || ".png";
     const filename = `community-${req.params.id}-${Date.now()}${ext}`;
@@ -33,19 +31,14 @@ const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (!file.mimetype.startsWith("image/")) {
-      return cb(new Error("Only image files are allowed"));
-    }
+    if (!file.mimetype.startsWith("image/")) return cb(new Error("Only image files are allowed"));
     cb(null, true);
   },
 });
 
 const bumpCommunityActivity = async (communityId) => {
   if (!communityId) return;
-  await Community.updateOne(
-    { _id: communityId },
-    { $set: { lastActivityAt: new Date() } }
-  );
+  await Community.updateOne({ _id: communityId }, { $set: { lastActivityAt: new Date() } });
 };
 
 router.post("/", requireAuth, async (req, res) => {
@@ -97,9 +90,7 @@ router.get("/my", requireAuth, async (req, res) => {
   try {
     const userId = req.session.userId;
 
-    const memberships = await CommunityMembership.find({ user: userId })
-      .populate("community")
-      .exec();
+    const memberships = await CommunityMembership.find({ user: userId }).populate("community").exec();
 
     const communities = memberships
       .filter((m) => m.community)
@@ -156,20 +147,12 @@ router.get("/discover", async (req, res) => {
     }
 
     if (userId) {
-      const myMemberships = await CommunityMembership.find({ user: userId })
-        .select("community")
-        .lean();
-
+      const myMemberships = await CommunityMembership.find({ user: userId }).select("community").lean();
       const myCommunityIds = myMemberships.map((m) => m.community);
-      if (myCommunityIds.length) {
-        filter._id = { $nin: myCommunityIds };
-      }
+      if (myCommunityIds.length) filter._id = { $nin: myCommunityIds };
     }
 
-    const communities = await Community.find(filter)
-      .sort({ lastActivityAt: -1 })
-      .limit(50)
-      .exec();
+    const communities = await Community.find(filter).sort({ lastActivityAt: -1 }).limit(50).exec();
 
     const result = communities.map((c) => ({
       id: c._id,
@@ -194,13 +177,9 @@ router.get("/:id", async (req, res) => {
   try {
     const { id: communityId } = req.params;
 
-    const community = await Community.findById(communityId)
-      .populate("owner", "username firstName lastName")
-      .exec();
+    const community = await Community.findById(communityId).populate("owner", "username firstName lastName").exec();
 
-    if (!community) {
-      return res.status(404).json({ ok: false, error: "Community not found" });
-    }
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
     const memberships = await CommunityMembership.find({ community: communityId })
       .populate("user", "username firstName lastName")
@@ -209,24 +188,19 @@ router.get("/:id", async (req, res) => {
     const toUserSummary = (userDoc) => {
       if (!userDoc) return null;
       const fullName = [userDoc.firstName, userDoc.lastName].filter(Boolean).join(" ").trim();
-      return {
-        id: userDoc._id,
-        username: userDoc.username || fullName || "Unknown",
-        fullName: fullName || null,
-      };
+      return { id: userDoc._id, username: userDoc.username || fullName || "Unknown", fullName: fullName || null };
     };
 
     const ownerSummary = community.owner ? toUserSummary(community.owner) : null;
 
-    const leaderMemberships = memberships.filter((m) => m.role === "Leader" && m.user);
-    const leaders = leaderMemberships.map((m) => toUserSummary(m.user)).filter(Boolean);
+    const leaders = memberships
+      .filter((m) => m.role === "Leader" && m.user)
+      .map((m) => toUserSummary(m.user))
+      .filter(Boolean);
 
     const memberSummaries = memberships
       .filter((m) => m.user)
-      .map((m) => ({
-        ...toUserSummary(m.user),
-        role: m.role,
-      }));
+      .map((m) => ({ ...toUserSummary(m.user), role: m.role }));
 
     return res.json({
       ok: true,
@@ -257,15 +231,9 @@ router.post("/:id/invite", requireAuth, async (req, res) => {
     const inviterId = req.session.userId;
 
     const community = await Community.findById(communityId).exec();
-    if (!community) {
-      return res.status(404).json({ ok: false, error: "Community not found" });
-    }
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
-    const inviterMembership = await CommunityMembership.findOne({
-      user: inviterId,
-      community: communityId,
-    }).exec();
-
+    const inviterMembership = await CommunityMembership.findOne({ user: inviterId, community: communityId }).exec();
     if (!inviterMembership || !["Owner", "Leader"].includes(inviterMembership.role)) {
       return res.status(403).json({
         ok: false,
@@ -275,10 +243,7 @@ router.post("/:id/invite", requireAuth, async (req, res) => {
 
     const inviter = await User.findById(inviterId).select("firstName lastName").exec();
     const invitee = await User.findById(inviteeId).select("firstName lastName email").exec();
-
-    if (!invitee) {
-      return res.status(404).json({ ok: false, error: "User to invite not found" });
-    }
+    if (!invitee) return res.status(404).json({ ok: false, error: "User to invite not found" });
 
     const inviterName = inviter ? `${inviter.firstName} ${inviter.lastName}` : "Someone";
     const message = `${inviterName} has invited you to join ${community.header}.`;
@@ -304,9 +269,7 @@ router.post("/:id/request-join", requireAuth, async (req, res) => {
     const requesterId = req.session.userId;
 
     const community = await Community.findById(communityId).populate("owner").exec();
-    if (!community) {
-      return res.status(404).json({ ok: false, error: "Community not found" });
-    }
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
     const requester = await User.findById(requesterId).select("firstName lastName").exec();
     const requesterName = requester ? `${requester.firstName} ${requester.lastName}` : "A user";
@@ -352,9 +315,7 @@ router.get("/:id/posts", requireAuth, async (req, res) => {
     const { id: communityId } = req.params;
 
     const community = await Community.findById(communityId).exec();
-    if (!community) {
-      return res.status(404).json({ ok: false, error: "Community not found" });
-    }
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
     const posts = await CommunityPost.find({ community: communityId })
       .sort({ createdAt: -1 })
@@ -372,10 +333,10 @@ router.get("/:id/posts", requireAuth, async (req, res) => {
           p.type === "questions"
             ? "Questions"
             : p.type === "announcements"
-            ? "Announcements"
-            : p.type === "poll"
-            ? "Poll"
-            : "General",
+              ? "Announcements"
+              : p.type === "poll"
+                ? "Poll"
+                : "General",
         categoryClass: mapTypeToClass(p.type),
         replyCount: p.replyCount || 0,
         activityText: p.updatedAt || p.createdAt,
@@ -407,16 +368,11 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     }
 
     const community = await Community.findById(communityId).exec();
-    if (!community) {
-      return res.status(404).json({ ok: false, error: "Community not found" });
-    }
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
     const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership) {
-      return res.status(403).json({
-        ok: false,
-        error: "You must join this community before posting.",
-      });
+      return res.status(403).json({ ok: false, error: "You must join this community before posting." });
     }
 
     const pollConfig = req.body.poll;
@@ -429,21 +385,20 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
       type: normalizedType,
       ...(normalizedType === "poll" && pollConfig
         ? {
-            poll: {
-              options: (pollConfig.options || [])
-                .map((text) => ({ text: String(text).trim() }))
-                .filter((o) => o.text),
-              allowMultiple: !!pollConfig.allowMultiple,
-              anonymous: pollConfig.anonymous !== false,
-            },
-          }
+          poll: {
+            options: (pollConfig.options || [])
+              .map((text) => ({ text: String(text).trim() }))
+              .filter((o) => o.text),
+            allowMultiple: !!pollConfig.allowMultiple,
+            anonymous: pollConfig.anonymous !== false,
+          },
+        }
         : {}),
     });
 
     await bumpCommunityActivity(communityId);
 
     const safeBody = body || "";
-
     const responsePost = {
       id: post._id,
       title: post.title,
@@ -452,10 +407,10 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
         normalizedType === "questions"
           ? "Questions"
           : normalizedType === "announcements"
-          ? "Announcements"
-          : normalizedType === "poll"
-          ? "Poll"
-          : "General",
+            ? "Announcements"
+            : normalizedType === "poll"
+              ? "Poll"
+              : "General",
       categoryClass: mapTypeToClass(normalizedType),
       replyCount: 0,
       activityText: post.createdAt,
@@ -464,14 +419,11 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     };
 
     try {
-      const memberships = await CommunityMembership.find({ community: communityId })
-        .populate("user", "firstName lastName")
-        .exec();
+      const memberships = await CommunityMembership.find({ community: communityId }).populate("user", "firstName lastName").exec();
 
-      const author = memberships.find((m) => String(m.user?._id) === String(userId));
-
-      const authorName = author?.user
-        ? [author.user.firstName, author.user.lastName].filter(Boolean).join(" ")
+      const authorMembership = memberships.find((m) => String(m.user?._id) === String(userId));
+      const authorName = authorMembership?.user
+        ? [authorMembership.user.firstName, authorMembership.user.lastName].filter(Boolean).join(" ")
         : "A member";
 
       const message = `${authorName} posted “${post.title}” in ${community.header}.`;
@@ -510,21 +462,14 @@ router.post("/:id/hero-image", requireAuth, upload.single("heroImage"), async (r
     const userId = req.session.userId;
 
     const community = await Community.findById(communityId).exec();
-    if (!community) {
-      return res.status(404).json({ ok: false, error: "Community not found" });
-    }
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
     const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership || !["Owner", "Leader"].includes(membership.role)) {
-      return res.status(403).json({
-        ok: false,
-        error: "You do not have permission to update this hero image.",
-      });
+      return res.status(403).json({ ok: false, error: "You do not have permission to update this hero image." });
     }
 
-    if (!req.file) {
-      return res.status(400).json({ ok: false, error: "No file uploaded." });
-    }
+    if (!req.file) return res.status(400).json({ ok: false, error: "No file uploaded." });
 
     const relativePath = `/uploads/community-heroes/${req.file.filename}`;
     community.heroImageUrl = relativePath;
@@ -543,17 +488,13 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
     const userId = req.session.userId;
 
     const community = await Community.findById(communityId).exec();
-    if (!community) {
-      return res.status(404).json({ ok: false, error: "Community not found" });
-    }
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
     const post = await CommunityPost.findOne({ _id: postId, community: communityId })
       .populate("author", "username firstName lastName")
       .exec();
 
-    if (!post) {
-      return res.status(404).json({ ok: false, error: "Post not found" });
-    }
+    if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
 
     const fullName = post.author ? [post.author.firstName, post.author.lastName].filter(Boolean).join(" ") : null;
 
@@ -563,12 +504,10 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
 
     if (post.type === "poll" && post.poll && post.poll.options.length) {
       const votes = await CommunityPollVote.find({ post: post._id }).exec();
-
       const counts = Array(post.poll.options.length).fill(0);
       votes.forEach((v) => {
         if (v.optionIndex >= 0 && v.optionIndex < counts.length) counts[v.optionIndex]++;
       });
-
       const totalVotes = counts.reduce((a, b) => a + b, 0);
 
       poll = {
@@ -579,9 +518,7 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
 
       pollResults = { counts, totalVotes };
 
-      myVotes = votes
-        .filter((v) => String(v.user) === String(userId))
-        .map((v) => v.optionIndex);
+      myVotes = votes.filter((v) => String(v.user) === String(userId)).map((v) => v.optionIndex);
     }
 
     const responsePost = {
@@ -601,11 +538,7 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
     return res.json({
       ok: true,
       post: responsePost,
-      community: {
-        id: community._id,
-        header: community.header,
-        subheader: community.subheader,
-      },
+      community: { id: community._id, header: community.header, subheader: community.subheader, heroImageUrl: community.heroImageUrl || null },
     });
   } catch (err) {
     console.error("[get community post detail error]", err);
@@ -624,9 +557,7 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
     }
 
     const community = await Community.findById(communityId).exec();
-    if (!community) {
-      return res.status(404).json({ ok: false, error: "Community not found" });
-    }
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
     const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
     if (!post || post.type !== "poll" || !post.poll) {
@@ -639,10 +570,7 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
 
     const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership) {
-      return res.status(403).json({
-        ok: false,
-        error: "You must join this community to participate in polls.",
-      });
+      return res.status(403).json({ ok: false, error: "You must join this community to participate in polls." });
     }
 
     const existing = await CommunityPollVote.findOne({ post: post._id, user: userId, optionIndex }).exec();
@@ -656,7 +584,6 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
       votes.forEach((v) => {
         if (v.optionIndex >= 0 && v.optionIndex < counts.length) counts[v.optionIndex]++;
       });
-
       const totalVotes = counts.reduce((a, b) => a + b, 0);
       const myVotes = votes.filter((v) => String(v.user) === String(userId)).map((v) => v.optionIndex);
 
@@ -668,7 +595,6 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
     }
 
     await CommunityPollVote.create({ post: post._id, user: userId, optionIndex });
-
     await bumpCommunityActivity(communityId);
 
     const votes = await CommunityPollVote.find({ post: post._id }).exec();
@@ -676,7 +602,6 @@ router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
     votes.forEach((v) => {
       if (v.optionIndex >= 0 && v.optionIndex < counts.length) counts[v.optionIndex]++;
     });
-
     const totalVotes = counts.reduce((a, b) => a + b, 0);
     const myVotes = votes.filter((v) => String(v.user) === String(userId)).map((v) => v.optionIndex);
 
@@ -692,9 +617,7 @@ router.get("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
     const { id: communityId, postId } = req.params;
 
     const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
-    if (!post) {
-      return res.status(404).json({ ok: false, error: "Post not found" });
-    }
+    if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
 
     const replies = await CommunityReply.find({ post: post._id })
       .sort({ createdAt: 1 })
@@ -707,12 +630,15 @@ router.get("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
         id: r._id,
         body: r.body,
         author: fullName || r.author?.username || "Unknown",
+        authorId: r.author?._id ? String(r.author._id) : null,
         createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
         parentReplyId: r.parentReply ? String(r.parentReply) : null,
       };
     });
 
-    return res.json({ ok: true, replies: result });
+    return res.json({ ok: true, myUserId: req.session.userId, replies: result });
+
   } catch (err) {
     console.error("[get post replies error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
@@ -730,25 +656,17 @@ router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
     }
 
     const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
-    if (!post) {
-      return res.status(404).json({ ok: false, error: "Post not found" });
-    }
+    if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
 
     const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership) {
-      return res.status(403).json({
-        ok: false,
-        error: "You must join this community before replying.",
-      });
+      return res.status(403).json({ ok: false, error: "You must join this community before replying." });
     }
 
     let parentReply = null;
-
     if (parentReplyId) {
       parentReply = await CommunityReply.findOne({ _id: parentReplyId, post: post._id }).exec();
-      if (!parentReply) {
-        return res.status(400).json({ ok: false, error: "Invalid parent reply." });
-      }
+      if (!parentReply) return res.status(400).json({ ok: false, error: "Invalid parent reply." });
     }
 
     const reply = await CommunityReply.create({
@@ -764,19 +682,134 @@ router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
 
     await bumpCommunityActivity(communityId);
 
+    const populated = await CommunityReply.findById(reply._id)
+      .populate("author", "username firstName lastName")
+      .exec();
+
+    const fullName = populated?.author ? [populated.author.firstName, populated.author.lastName].filter(Boolean).join(" ") : null;
+
     return res.status(201).json({
       ok: true,
       reply: {
         id: reply._id,
         body: reply.body,
+        author: fullName || populated?.author?.username || "Unknown",
+        authorId: populated?.author?._id ? String(populated.author._id) : null,
         createdAt: reply.createdAt,
+        updatedAt: reply.updatedAt,
         parentReplyId: reply.parentReply ? String(reply.parentReply) : null,
       },
     });
+
   } catch (err) {
     console.error("[create post reply error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
+
+router.put("/:id/posts/:postId/replies/:replyId", requireAuth, async (req, res) => {
+  try {
+    const { id: communityId, postId, replyId } = req.params;
+    const userId = req.session.userId;
+    const { body } = req.body || {};
+
+    if (!body || !body.trim()) {
+      return res.status(400).json({ ok: false, error: "Reply body is required." });
+    }
+
+    const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
+    if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
+
+    const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
+    if (!membership) {
+      return res.status(403).json({ ok: false, error: "You must join this community to edit replies." });
+    }
+
+    const reply = await CommunityReply.findOne({ _id: replyId, post: post._id }).exec();
+    if (!reply) return res.status(404).json({ ok: false, error: "Reply not found" });
+
+    if (String(reply.author) !== String(userId)) {
+      return res.status(403).json({ ok: false, error: "You can only edit your own replies." });
+    }
+
+    reply.body = body.trim();
+    await reply.save();
+
+    await bumpCommunityActivity(communityId);
+
+    return res.json({
+      ok: true,
+      reply: {
+        id: reply._id,
+        body: reply.body,
+        updatedAt: reply.updatedAt,
+      },
+    });
+  } catch (err) {
+    console.error("[edit reply error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.delete("/:id/posts/:postId/replies/:replyId", requireAuth, async (req, res) => {
+  try {
+    const { id: communityId, postId, replyId } = req.params;
+    const userId = req.session.userId;
+
+    const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
+    if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
+
+    const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
+    if (!membership) {
+      return res.status(403).json({ ok: false, error: "You must join this community to delete replies." });
+    }
+
+    const target = await CommunityReply.findOne({ _id: replyId, post: post._id }).exec();
+    if (!target) return res.status(404).json({ ok: false, error: "Reply not found" });
+
+    if (String(target.author) !== String(userId)) {
+      return res.status(403).json({ ok: false, error: "You can only delete your own replies." });
+    }
+
+    const all = await CommunityReply.find({ post: post._id }).select("_id parentReply createdAt").lean();
+
+    const byParent = new Map();
+    for (const r of all) {
+      const p = r.parentReply ? String(r.parentReply) : "root";
+      if (!byParent.has(p)) byParent.set(p, []);
+      byParent.get(p).push(String(r._id));
+    }
+
+    const toDelete = new Set();
+    const stack = [String(replyId)];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (toDelete.has(cur)) continue;
+      toDelete.add(cur);
+      const kids = byParent.get(cur) || [];
+      for (const k of kids) stack.push(k);
+    }
+
+    const deleteIds = [...toDelete].map((x) => x);
+    const deletedCount = deleteIds.length;
+
+    await CommunityReply.deleteMany({ _id: { $in: deleteIds }, post: post._id });
+
+    const remaining = await CommunityReply.find({ post: post._id }).sort({ createdAt: -1 }).limit(1).lean();
+    const last = remaining[0] || null;
+
+    post.replyCount = Math.max(0, (post.replyCount || 0) - deletedCount);
+    post.lastReplyAt = last ? last.createdAt : null;
+    await post.save();
+
+    await bumpCommunityActivity(communityId);
+
+    return res.json({ ok: true, deletedCount });
+  } catch (err) {
+    console.error("[delete reply error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
 
 module.exports = router;
