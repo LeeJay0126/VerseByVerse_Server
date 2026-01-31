@@ -13,6 +13,8 @@ const CommunityPollVote = require("../models/CommunityPollVote");
 
 const router = express.Router();
 
+const MAX_ANNOUNCEMENTS_PER_COMMUNITY = 3;
+
 const heroUploadDir = path.join(__dirname, "..", "uploads", "community-heroes");
 if (!fs.existsSync(heroUploadDir)) {
   fs.mkdirSync(heroUploadDir, { recursive: true });
@@ -343,6 +345,7 @@ router.get("/:id/posts", requireAuth, async (req, res) => {
         author: fullName || p.author?.username || "Unknown",
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
+        type: p.type,
       };
     });
 
@@ -373,6 +376,20 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership) {
       return res.status(403).json({ ok: false, error: "You must join this community before posting." });
+    }
+
+    if (normalizedType === "announcements") {
+      const existingAnnouncementCount = await CommunityPost.countDocuments({
+        community: communityId,
+        type: "announcements",
+      });
+
+      if (existingAnnouncementCount >= MAX_ANNOUNCEMENTS_PER_COMMUNITY) {
+        return res.status(400).json({
+          ok: false,
+          error: `This community already has the maximum of ${MAX_ANNOUNCEMENTS_PER_COMMUNITY} announcements.`,
+        });
+      }
     }
 
     const pollConfig = req.body.poll;
@@ -416,10 +433,13 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
       activityText: post.createdAt,
       createdAt: post.createdAt,
       updatedAt: post.updatedAt,
+      type: normalizedType,
     };
 
     try {
-      const memberships = await CommunityMembership.find({ community: communityId }).populate("user", "firstName lastName").exec();
+      const memberships = await CommunityMembership.find({ community: communityId })
+        .populate("user", "firstName lastName")
+        .exec();
 
       const authorMembership = memberships.find((m) => String(m.user?._id) === String(userId));
       const authorName = authorMembership?.user
@@ -517,7 +537,6 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
       };
 
       pollResults = { counts, totalVotes };
-
       myVotes = votes.filter((v) => String(v.user) === String(userId)).map((v) => v.optionIndex);
     }
 
@@ -538,7 +557,12 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
     return res.json({
       ok: true,
       post: responsePost,
-      community: { id: community._id, header: community.header, subheader: community.subheader, heroImageUrl: community.heroImageUrl || null },
+      community: {
+        id: community._id,
+        header: community.header,
+        subheader: community.subheader,
+        heroImageUrl: community.heroImageUrl || null,
+      },
     });
   } catch (err) {
     console.error("[get community post detail error]", err);
@@ -638,7 +662,6 @@ router.get("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
     });
 
     return res.json({ ok: true, myUserId: req.session.userId, replies: result });
-
   } catch (err) {
     console.error("[get post replies error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
@@ -700,7 +723,6 @@ router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
         parentReplyId: reply.parentReply ? String(reply.parentReply) : null,
       },
     });
-
   } catch (err) {
     console.error("[create post reply error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
@@ -810,6 +832,5 @@ router.delete("/:id/posts/:postId/replies/:replyId", requireAuth, async (req, re
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
-
 
 module.exports = router;
