@@ -11,6 +11,8 @@ const path = require("path");
 const userRoutes = require("./routes/UserRoutes");
 const passageRoutes = require("./routes/KorProxy");
 const communityRoutes = require("./routes/communityRoutes");
+const communityPostRoutes = require("./routes/communityPostRoutes");
+const communityCommentRoutes = require("./routes/communityCommentRoutes");
 const notificationRoutes = require("./routes/NotificationRoutes");
 const notesRoutes = require("./routes/noteRoutes");
 
@@ -92,6 +94,8 @@ app.get("/health", (_req, res) => res.json({ ok: true, status: "up" }));
 app.use("/auth", userRoutes);
 app.use("/api", passageRoutes);
 app.use("/community", communityRoutes);
+app.use("/community", communityPostRoutes);
+app.use("/community", communityCommentRoutes);
 app.use("/notifications", notificationRoutes);
 app.use("/notes", notesRoutes);
 
