@@ -18,7 +18,7 @@ const buildPreview = (text) =>
 /**
  * GET /notes/list?q=&bibleId=&bookId=&chapterId=&sort=updatedAt:desc&limit=&offset=
  */
-router.get("/list", requireAuth, async (req, res) => {
+router.get("/list", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
 
@@ -106,7 +106,7 @@ router.get("/list", requireAuth, async (req, res) => {
  * GET /notes/exists?bibleId=&chapterId=
  * IMPORTANT: must be before "/:id"
  */
-router.get("/exists", requireAuth, async (req, res) => {
+router.get("/exists", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
     const { bibleId, chapterId } = req.query;
@@ -128,7 +128,7 @@ router.get("/exists", requireAuth, async (req, res) => {
 /**
  * GET /notes/:id
  */
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
     const { id } = req.params;
@@ -146,7 +146,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 /**
  * PUT /notes/:id (update by id)
  */
-router.put("/:id", requireAuth, async (req, res) => {
+router.put("/:id", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
     const { id } = req.params;
@@ -171,7 +171,7 @@ router.put("/:id", requireAuth, async (req, res) => {
 /**
  * DELETE /notes/:id
  */
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
     const { id } = req.params;
@@ -190,7 +190,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
  * GET /notes?bibleId=&chapterId=&rangeStart=&rangeEnd=
  * Returns the most recently updated note for that scope (if any).
  */
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
     const { bibleId, chapterId, rangeStart, rangeEnd } = req.query;
@@ -219,7 +219,7 @@ router.get("/", requireAuth, async (req, res) => {
 /**
  * POST /notes (create new note, NEVER overwrite)
  */
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
     const { bibleId, chapterId, rangeStart, rangeEnd, title = "", text = "" } = req.body || {};

@@ -144,10 +144,10 @@ function buildResetEmail({ appName, resetUrl }) {
   const html = `
     <div style="font-family: Arial, sans-serif; line-height:1.4;">
       <h2 style="margin:0 0 12px;">Reset your password</h2>
-      <p style="margin:0 0 12px;">
+      <p style="margin:0 0 24px;">
         Click the button below to choose a new password.
       </p>
-      <p style="margin:0 0 16px;">
+      <p style="margin:0 0 24px;">
         <a href="${resetUrl}"
            style="display:inline-block;padding:10px 14px;border-radius:10px;text-decoration:none;background:#160000;color:#F5EAEA;font-weight:700;">
           Reset Password
@@ -308,9 +308,7 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-/**
- * GET /auth/verify-email?email=...&token=...
- */
+
 router.get("/verify-email", async (req, res) => {
   try {
     const email = String(req.query.email || "").trim().toLowerCase();
@@ -320,15 +318,41 @@ router.get("/verify-email", async (req, res) => {
       return res.status(400).json({ ok: false, error: "email/token required" });
     }
 
-    const tokenHash = sha256Hex(token);
-
-    const user = await User.findOne({
-      email,
-      emailVerifyTokenHash: tokenHash,
-      emailVerifyTokenExpiresAt: { $gt: new Date() },
-    });
+    const user = await User.findOne({ email }).select(
+      "_id email emailVerified emailVerifiedAt emailVerifyTokenHash emailVerifyTokenExpiresAt"
+    );
 
     if (!user) {
+      return res.status(400).json({
+        ok: false,
+        code: "INVALID_OR_EXPIRED",
+        error: "Invalid or expired token",
+      });
+    }
+
+    if (user.emailVerified) {
+      return res.json({ ok: true, alreadyVerified: true });
+    }
+
+    if (!user.emailVerifyTokenHash || !user.emailVerifyTokenExpiresAt) {
+      return res.status(400).json({
+        ok: false,
+        code: "INVALID_OR_EXPIRED",
+        error: "Invalid or expired token",
+      });
+    }
+
+    const expiresAt = new Date(user.emailVerifyTokenExpiresAt).getTime();
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      return res.status(400).json({
+        ok: false,
+        code: "INVALID_OR_EXPIRED",
+        error: "Invalid or expired token",
+      });
+    }
+
+    const tokenHash = sha256Hex(token);
+    if (tokenHash !== user.emailVerifyTokenHash) {
       return res.status(400).json({
         ok: false,
         code: "INVALID_OR_EXPIRED",
@@ -340,6 +364,8 @@ router.get("/verify-email", async (req, res) => {
     user.emailVerifiedAt = new Date();
     user.emailVerifyTokenHash = undefined;
     user.emailVerifyTokenExpiresAt = undefined;
+    user.emailVerifyLastSentAt = undefined;
+
     await user.save();
 
     return res.json({ ok: true });
@@ -366,6 +392,18 @@ router.post("/resend-verification", async (req, res) => {
     const lastSent = user.emailVerifyLastSentAt ? new Date(user.emailVerifyLastSentAt).getTime() : 0;
     if (Date.now() - lastSent < RESEND_COOLDOWN_MS) {
       return res.status(429).json({ ok: false, code: "TOO_SOON", error: "Please wait before resending." });
+    }
+
+    const hasToken = !!user.emailVerifyTokenHash && !!user.emailVerifyTokenExpiresAt;
+    const stillValid =
+      hasToken && new Date(user.emailVerifyTokenExpiresAt).getTime() > Date.now();
+
+    if (stillValid) {
+      return res.json({
+        ok: true,
+        code: "ALREADY_SENT",
+        message: "Verification email already sent recently. Please check your inbox.",
+      });
     }
 
     await issueAndSendVerifyEmail(user);
@@ -490,6 +528,26 @@ router.post("/login", async (req, res) => {
     if (!valid) return res.status(401).json({ ok: false, error: "Invalid credentials" });
 
     if (!user.emailVerified) {
+      try {
+        const lastSent = user.emailVerifyLastSentAt
+          ? new Date(user.emailVerifyLastSentAt).getTime()
+          : 0;
+
+        const tooSoon = Date.now() - lastSent < RESEND_COOLDOWN_MS;
+
+        const stillValid =
+          !!user.emailVerifyTokenHash &&
+          !!user.emailVerifyTokenExpiresAt &&
+          new Date(user.emailVerifyTokenExpiresAt).getTime() > Date.now();
+
+        // Only send if it's not too soon AND no still-valid token exists
+        if (!tooSoon && !stillValid) {
+          await issueAndSendVerifyEmail(user);
+        }
+      } catch (sendErr) {
+        console.error("[login verify email send error]", sendErr);
+      }
+
       return res.status(403).json({
         ok: false,
         code: "EMAIL_NOT_VERIFIED",

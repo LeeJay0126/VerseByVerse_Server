@@ -1,10 +1,5 @@
 const User = require("../models/User");
 
-/**
- * requireAuth({ requireVerified: true/false })
- * - Default: requireVerified = true
- * - Skips OPTIONS for CORS preflight
- */
 module.exports = function requireAuth(options = {}) {
   const { requireVerified = true } = options;
 
@@ -25,17 +20,14 @@ module.exports = function requireAuth(options = {}) {
       }
 
       if (!user.emailVerified) {
-        return res.status(403).json({
-          ok: false,
-          code: "EMAIL_NOT_VERIFIED",
-          error: "Please verify your email to continue.",
-        });
+        return res
+          .status(403)
+          .json({ ok: false, error: "Email not verified" });
       }
 
       return next();
-    } catch (e) {
-      console.error("[requireAuth error]", e);
-      return res.status(500).json({ ok: false, error: "Internal server error" });
+    } catch (err) {
+      return next(err);
     }
   };
 };

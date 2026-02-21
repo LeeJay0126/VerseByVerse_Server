@@ -12,7 +12,7 @@ const bumpCommunityActivity = async (communityId) => {
   await Community.updateOne({ _id: communityId }, { $set: { lastActivityAt: new Date() } });
 };
 
-router.get("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
+router.get("/:id/posts/:postId/replies", requireAuth(), async (req, res) => {
   try {
     const { id: communityId, postId } = req.params;
 
@@ -44,7 +44,7 @@ router.get("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
+router.post("/:id/posts/:postId/replies", requireAuth(), async (req, res) => {
   try {
     const { id: communityId, postId } = req.params;
     const userId = req.session.userId;
@@ -105,7 +105,7 @@ router.post("/:id/posts/:postId/replies", requireAuth, async (req, res) => {
   }
 });
 
-router.put("/:id/posts/:postId/replies/:replyId", requireAuth, async (req, res) => {
+router.put("/:id/posts/:postId/replies/:replyId", requireAuth(), async (req, res) => {
   try {
     const { id: communityId, postId, replyId } = req.params;
     const userId = req.session.userId;
@@ -149,7 +149,7 @@ router.put("/:id/posts/:postId/replies/:replyId", requireAuth, async (req, res) 
   }
 });
 
-router.delete("/:id/posts/:postId/replies/:replyId", requireAuth, async (req, res) => {
+router.delete("/:id/posts/:postId/replies/:replyId", requireAuth(), async (req, res) => {
   try {
     const { id: communityId, postId, replyId } = req.params;
     const userId = req.session.userId;
