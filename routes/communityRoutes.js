@@ -8,7 +8,7 @@ const uploadCommunityHero = require("../middleware/communityHeroUpload");
 
 const router = express.Router();
 
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth(), async (req, res) => {
   try {
     const { header, subheader, content, type } = req.body || {};
     const userId = req.session.userId;
@@ -53,7 +53,7 @@ router.post("/", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/my", requireAuth, async (req, res) => {
+router.get("/my", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
 
@@ -190,7 +190,7 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-router.post("/:id/invite", requireAuth, async (req, res) => {
+router.post("/:id/invite", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
     const { userId: inviteeId } = req.body;
@@ -226,7 +226,7 @@ router.post("/:id/invite", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/:id/request-join", requireAuth, async (req, res) => {
+router.post("/:id/request-join", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
     const requesterId = req.session.userId;
@@ -253,7 +253,7 @@ router.post("/:id/request-join", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/:id/hero-image", requireAuth, uploadCommunityHero.single("heroImage"), async (req, res) => {
+router.post("/:id/hero-image", requireAuth(), uploadCommunityHero.single("heroImage"), async (req, res) => {
   try {
     const { id: communityId } = req.params;
     const userId = req.session.userId;

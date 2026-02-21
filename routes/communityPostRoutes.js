@@ -59,7 +59,7 @@ const typeToCategory = (t) => {
     return "General";
 };
 
-router.get("/:id/posts", requireAuth, async (req, res) => {
+router.get("/:id/posts", requireAuth(), async (req, res) => {
     try {
         const { id: communityId } = req.params;
 
@@ -97,7 +97,7 @@ router.get("/:id/posts", requireAuth, async (req, res) => {
     }
 });
 
-router.post("/:id/posts", requireAuth, async (req, res) => {
+router.post("/:id/posts", requireAuth(), async (req, res) => {
     try {
         const { id: communityId } = req.params;
         const userId = req.session.userId;
@@ -210,7 +210,7 @@ router.post("/:id/posts", requireAuth, async (req, res) => {
     }
 });
 
-router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
+router.get("/:id/posts/:postId", requireAuth(), async (req, res) => {
     try {
         const { id: communityId, postId } = req.params;
         const userId = req.session.userId;
@@ -277,7 +277,7 @@ router.get("/:id/posts/:postId", requireAuth, async (req, res) => {
     }
 });
 
-router.put("/:id/posts/:postId", requireAuth, async (req, res) => {
+router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
     try {
         const { id: communityId, postId } = req.params;
         const userId = req.session.userId;
@@ -373,7 +373,7 @@ router.put("/:id/posts/:postId", requireAuth, async (req, res) => {
     }
 });
 
-router.delete("/:id/posts/:postId", requireAuth, async (req, res) => {
+router.delete("/:id/posts/:postId", requireAuth(), async (req, res) => {
     try {
         const { id: communityId, postId } = req.params;
         const userId = req.session.userId;
@@ -411,7 +411,7 @@ router.delete("/:id/posts/:postId", requireAuth, async (req, res) => {
     }
 });
 
-router.post("/:id/posts/:postId/vote", requireAuth, async (req, res) => {
+router.post("/:id/posts/:postId/vote", requireAuth(), async (req, res) => {
     try {
         const { id: communityId, postId } = req.params;
         const userId = req.session.userId;
