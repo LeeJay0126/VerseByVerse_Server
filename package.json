@@ -22,7 +22,9 @@
     "mongoose": "^8.19.4",
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "nodemailer": "^8.0.1",
+    "zxcvbn": "^4.4.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"

@@ -9,6 +9,7 @@ const cookieParser = require("cookie-parser");
 const path = require("path");
 
 const userRoutes = require("./routes/UserRoutes");
+const authRoutes = require("./routes/auth");
 const passageRoutes = require("./routes/KorProxy");
 const communityRoutes = require("./routes/communityRoutes");
 const communityPostRoutes = require("./routes/communityPostRoutes");
@@ -42,7 +43,6 @@ app.use((req, res, next) => {
   next();
 });
 
-
 const corsOptions = {
   origin: CLIENT_ORIGIN,
   credentials: true,
@@ -51,16 +51,14 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 
-app.use((req, res, next) => {
+app.use((req, _res, next) => {
   if (req.method === "OPTIONS") {
     console.log("❌ OPTIONS fell through:", req.originalUrl);
   }
   next();
 });
 
-
 /* ---------- middleware ---------- */
-
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
@@ -91,7 +89,8 @@ app.use(
 /* ---------- routes ---------- */
 app.get("/health", (_req, res) => res.json({ ok: true, status: "up" }));
 
-app.use("/auth", userRoutes);
+app.use("/auth", authRoutes);
+app.use("/users", userRoutes);
 app.use("/api", passageRoutes);
 app.use("/community", communityRoutes);
 app.use("/community", communityPostRoutes);
