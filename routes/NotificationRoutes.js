@@ -1,14 +1,16 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const requireAuth = require("../middleware/requireAuth");
 const Notification = require("../models/Notifications");
 const Community = require("../models/Community");
 const CommunityMembership = require("../models/CommunityMembership");
 const createNotification = require("../utils/createNotifications");
 
+
 const router = express.Router();
 
 // GET /notifications?unread=true
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth(), async (req, res) => {
   try {
     const { unread } = req.query;
     const filter = { user: req.session.userId };
@@ -31,7 +33,7 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 // POST /notifications/:id/read
-router.post("/:id/read", requireAuth, async (req, res) => {
+router.post("/:id/read", requireAuth(), async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.session.userId;
@@ -56,7 +58,7 @@ router.post("/:id/read", requireAuth, async (req, res) => {
 });
 
 // POST /notifications/read-all
-router.post("/read-all", requireAuth, async (req, res) => {
+router.post("/read-all", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
 
@@ -73,7 +75,7 @@ router.post("/read-all", requireAuth, async (req, res) => {
 });
 
 // DELETE /notifications
-router.delete("/", requireAuth, async (req, res) => {
+router.delete("/", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
 
@@ -103,7 +105,7 @@ router.delete("/", requireAuth, async (req, res) => {
  * POST /notifications/:id/act
  * Body: { action: "accept" | "decline" }
  */
-router.post("/:id/act", requireAuth, async (req, res) => {
+router.post("/:id/act", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
     const { id } = req.params;
@@ -223,7 +225,7 @@ router.post("/:id/act", requireAuth, async (req, res) => {
 });
 
 // DELETE /notifications/:id  (delete one)
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
     const { id } = req.params;
