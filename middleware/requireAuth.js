@@ -20,9 +20,7 @@ module.exports = function requireAuth(options = {}) {
       }
 
       if (!user.emailVerified) {
-        return res
-          .status(403)
-          .json({ ok: false, error: "Email not verified" });
+        return res.status(403).json({ ok: false, error: "Email not verified" });
       }
 
       return next();
