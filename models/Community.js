@@ -8,34 +8,31 @@ const CommunitySchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: [
-        "Bible Study",
-        "Read Through",
-        "Church Organization",
-        "Prayer Group",
-        "Other",
-      ],
+      enum: ["Bible Study", "Read Through", "Church Organization", "Prayer Group", "Other"],
       required: true,
     },
 
-    // Who created this community
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
     },
 
-    // Denormalized member count for quick display
     membersCount: {
       type: Number,
-      default: 1, // start with owner
+      default: 1,
+    },
+
+    settings: {
+      leadersCanManageMembers: { type: Boolean, default: false },
     },
 
     lastActivityAt: {
       type: Date,
       default: Date.now,
     },
-    heroImageUrl: { type: String }, // URL to the uploaded hero image
+
+    heroImageUrl: { type: String },
   },
   { timestamps: true }
 );
