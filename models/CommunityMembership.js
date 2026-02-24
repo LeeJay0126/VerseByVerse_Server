@@ -1,4 +1,3 @@
-// models/CommunityMembership.js
 const mongoose = require("mongoose");
 
 const CommunityMembershipSchema = new mongoose.Schema(
@@ -18,6 +17,12 @@ const CommunityMembershipSchema = new mongoose.Schema(
       enum: ["Owner", "Leader", "Member"],
       default: "Member",
     },
+    notificationPrefs: {
+      announcements: { type: Boolean, default: true },
+      bible_study: { type: Boolean, default: true },
+      questions: { type: Boolean, default: true },
+      poll: { type: Boolean, default: true },
+    },
     joinedAt: {
       type: Date,
       default: Date.now,
@@ -26,7 +31,6 @@ const CommunityMembershipSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// A user can only have one membership per community
 CommunityMembershipSchema.index({ user: 1, community: 1 }, { unique: true });
 
 module.exports = mongoose.model("CommunityMembership", CommunityMembershipSchema);

@@ -8,10 +8,6 @@ const uploadCommunityHero = require("../middleware/communityHeroUpload");
 
 const router = express.Router();
 
-/* =========================
-   Helpers
-   ========================= */
-
 const toUserSummary = (userDoc) => {
   if (!userDoc) return null;
   const fullName = [userDoc.firstName, userDoc.lastName].filter(Boolean).join(" ").trim();
@@ -46,10 +42,6 @@ const canManageMembers = async (userId, community) => {
   const leadersAllowed = Boolean(community?.settings?.leadersCanManageMembers);
   return leadersAllowed && membership.role === "Leader";
 };
-
-/* =========================
-   Communities: Create / List / Discover / Detail
-   ========================= */
 
 router.post("/", requireAuth(), async (req, res) => {
   try {
@@ -101,9 +93,7 @@ router.get("/my", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
 
-    const memberships = await CommunityMembership.find({ user: userId })
-      .populate("community")
-      .exec();
+    const memberships = await CommunityMembership.find({ user: userId }).populate("community").exec();
 
     const communities = memberships
       .filter((m) => m.community)
@@ -160,9 +150,7 @@ router.get("/discover", async (req, res) => {
     }
 
     if (userId) {
-      const myMemberships = await CommunityMembership.find({ user: userId })
-        .select("community")
-        .lean();
+      const myMemberships = await CommunityMembership.find({ user: userId }).select("community").lean();
       const myCommunityIds = myMemberships.map((m) => m.community);
       if (myCommunityIds.length) filter._id = { $nin: myCommunityIds };
     }
@@ -188,7 +176,7 @@ router.get("/discover", async (req, res) => {
   }
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
 
@@ -238,11 +226,6 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-/* =========================
-   Invitations (Owner OR Leader when enabled)
-   Body: { userId?: string, identifier?: string } identifier = username or email
-   ========================= */
-
 router.post("/:id/invite", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
@@ -275,9 +258,7 @@ router.post("/:id/invite", requireAuth(), async (req, res) => {
     let invitee = null;
 
     if (inviteeIdRaw) {
-      invitee = await User.findById(inviteeIdRaw)
-        .select("firstName lastName email username")
-        .exec();
+      invitee = await User.findById(inviteeIdRaw).select("firstName lastName email username").exec();
     } else {
       const ident = String(identifier || "").trim();
       if (!ident) return res.status(400).json({ ok: false, error: "Missing userId or identifier" });
@@ -333,10 +314,6 @@ router.post("/:id/invite", requireAuth(), async (req, res) => {
   }
 });
 
-/* =========================
-   Join requests (create notification to owner)
-   ========================= */
-
 router.post("/:id/request-join", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
@@ -350,7 +327,7 @@ router.post("/:id/request-join", requireAuth(), async (req, res) => {
     const message = `${requesterName} has requested to join ${community.header}.`;
 
     await createNotification({
-      user: community.owner,
+      user: community.owner?._id || community.owner,
       type: "COMMUNITY_JOIN_REQUEST",
       message,
       community: community._id,
@@ -363,10 +340,6 @@ router.post("/:id/request-join", requireAuth(), async (req, res) => {
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
-
-/* =========================
-   Hero image upload (Owner/Leader)
-   ========================= */
 
 router.post(
   "/:id/hero-image",
@@ -406,74 +379,88 @@ router.post(
   }
 );
 
-/* ===========================
-   MEMBER MANAGEMENT
-
- * Owner-only: update community settings (leadersCanManageMembers)
- * Body: { leadersCanManageMembers: boolean }
- */
-router.patch("/:id/settings", requireAuth(), async (req, res) => {
+router.patch("/:id/members/:userId/role", requireAuth(), async (req, res) => {
   try {
-    const { id: communityId } = req.params;
+    const { id: communityId, userId: targetUserId } = req.params;
     const userId = getUserId(req);
-    const { leadersCanManageMembers } = req.body || {};
+    const { role } = req.body || {};
 
     const community = await Community.findById(communityId).exec();
     if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
     if (!isOwner(community, userId)) {
-      return res.status(403).json({ ok: false, error: "Only the owner can update settings" });
+      return res.status(403).json({ ok: false, error: "Only the owner can change roles" });
     }
 
-    if (typeof leadersCanManageMembers !== "boolean") {
-      return res.status(400).json({ ok: false, error: "leadersCanManageMembers must be boolean" });
+    if (!["Leader", "Member"].includes(role)) {
+      return res.status(400).json({ ok: false, error: "role must be Leader or Member" });
     }
 
-    community.settings = community.settings || {};
-    community.settings.leadersCanManageMembers = leadersCanManageMembers;
-    await community.save();
+    if (String(targetUserId) === String(community.owner)) {
+      return res.status(400).json({ ok: false, error: "Owner role cannot be changed" });
+    }
 
-    const populated = await Community.findById(communityId)
-      .populate("owner", "username firstName lastName")
-      .exec();
+    const membership = await CommunityMembership.findOne({ user: targetUserId, community: communityId }).exec();
+    if (!membership) {
+      return res.status(404).json({ ok: false, error: "Membership not found" });
+    }
 
-    return res.json({
-      ok: true,
-      community: {
-        id: populated._id,
-        header: populated.header,
-        subheader: populated.subheader,
-        content: populated.content,
-        type: populated.type,
-        membersCount: populated.membersCount,
-        lastActivityAt: populated.lastActivityAt,
-        heroImageUrl: populated.heroImageUrl || null,
-        owner: populated.owner ? toUserSummary(populated.owner) : null,
-        settings: {
-          leadersCanManageMembers: Boolean(populated?.settings?.leadersCanManageMembers),
-        },
-      },
-    });
+    const prevRole = membership.role;
+    if (prevRole === role) return res.json({ ok: true });
+
+    membership.role = role;
+    await membership.save();
+
+    const ownerUser = await User.findById(userId).select("username firstName lastName").lean().exec();
+    const ownerName =
+      (ownerUser?.username && ownerUser.username.trim()) ||
+      [ownerUser?.firstName, ownerUser?.lastName].filter(Boolean).join(" ").trim() ||
+      "The owner";
+
+    const target = { kind: "COMMUNITY_MANAGE", id: community._id };
+
+    if (prevRole !== "Leader" && role === "Leader") {
+      const message = `${ownerName} has promoted you to a Leader role in ${community.header}.`;
+      await createNotification({
+        user: targetUserId,
+        type: "COMMUNITY_ROLE_PROMOTION",
+        message,
+        community: community._id,
+        actor: userId,
+        target,
+      });
+    }
+
+    if (prevRole === "Leader" && role === "Member") {
+      const message = `${ownerName} has demoted you to a Member role in ${community.header}.`;
+      await createNotification({
+        user: targetUserId,
+        type: "COMMUNITY_ROLE_DEMOTION",
+        message,
+        community: community._id,
+        actor: userId,
+        target,
+      });
+    }
+
+    return res.json({ ok: true });
   } catch (err) {
-    console.error("[community settings patch error]", err);
+    console.error("[change member role error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
-/**
- * List members (manage page)
- * Protected: Owner OR Leader when enabled
- */
 router.get("/:id/members", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
     const userId = getUserId(req);
 
-    const community = await Community.findById(communityId).exec();
-    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
+    const membership = await CommunityMembership.findOne({ user: userId, community: communityId })
+      .select("_id")
+      .lean()
+      .exec();
 
-    const canManage = await canManageMembers(userId, community);
-    if (!canManage) return res.status(403).json({ ok: false, error: "Forbidden" });
+    if (!membership) return res.status(403).json({ ok: false, error: "Not a member of this community" });
 
     const memberships = await CommunityMembership.find({ community: communityId })
       .populate("user", "username firstName lastName email")
@@ -502,11 +489,6 @@ router.get("/:id/members", requireAuth(), async (req, res) => {
   }
 });
 
-/**
- * Join requests list
- * Protected: Owner OR Leader when enabled
- * (Not persisted here, so empty array for now)
- */
 router.get("/:id/join-requests", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
@@ -525,10 +507,6 @@ router.get("/:id/join-requests", requireAuth(), async (req, res) => {
   }
 });
 
-/**
- * Accept join request (creates membership)
- * Protected: Owner OR Leader when enabled
- */
 router.post("/:id/join-requests/:userId/accept", requireAuth(), async (req, res) => {
   try {
     const { id: communityId, userId: targetUserId } = req.params;
@@ -564,10 +542,6 @@ router.post("/:id/join-requests/:userId/accept", requireAuth(), async (req, res)
   }
 });
 
-/**
- * Reject join request (no-op until you persist requests)
- * Protected: Owner OR Leader when enabled
- */
 router.post("/:id/join-requests/:userId/reject", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
@@ -586,11 +560,6 @@ router.post("/:id/join-requests/:userId/reject", requireAuth(), async (req, res)
   }
 });
 
-/**
- * Expel member
- * Protected: Owner OR Leader when enabled
- * Cannot expel owner
- */
 router.delete("/:id/members/:userId", requireAuth(), async (req, res) => {
   try {
     const { id: communityId, userId: targetUserId } = req.params;
@@ -624,10 +593,6 @@ router.delete("/:id/members/:userId", requireAuth(), async (req, res) => {
   }
 });
 
-/**
- * Owner-only: promote/demote role
- * Body: { role: "Leader" | "Member" }
- */
 router.patch("/:id/members/:userId/role", requireAuth(), async (req, res) => {
   try {
     const { id: communityId, userId: targetUserId } = req.params;
@@ -664,6 +629,80 @@ router.patch("/:id/members/:userId/role", requireAuth(), async (req, res) => {
     return res.json({ ok: true });
   } catch (err) {
     console.error("[change member role error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.get("/:id/notification-prefs", requireAuth(), async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+    const userId = getUserId(req);
+
+    const membership = await CommunityMembership.findOne({ user: userId, community: communityId })
+      .select("notificationPrefs")
+      .lean()
+      .exec();
+
+    if (!membership) return res.status(403).json({ ok: false, error: "Not a member of this community" });
+
+    const prefs = membership.notificationPrefs || {};
+    return res.json({
+      ok: true,
+      notificationPrefs: {
+        announcements: prefs.announcements !== false,
+        bible_study: prefs.bible_study !== false,
+        questions: prefs.questions !== false,
+        poll: prefs.poll !== false,
+      },
+    });
+  } catch (err) {
+    console.error("[get notification prefs error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.patch("/:id/notification-prefs", requireAuth(), async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+    const userId = getUserId(req);
+
+    const next = req.body || {};
+    const allowedKeys = ["announcements", "bible_study", "questions", "poll"];
+
+    const setObj = {};
+    for (const k of allowedKeys) {
+      if (typeof next[k] === "boolean") {
+        setObj[`notificationPrefs.${k}`] = next[k];
+      }
+    }
+
+    if (!Object.keys(setObj).length) {
+      return res.status(400).json({ ok: false, error: "No valid notification prefs provided" });
+    }
+
+    const membership = await CommunityMembership.findOneAndUpdate(
+      { user: userId, community: communityId },
+      { $set: setObj },
+      { new: true }
+    )
+      .select("notificationPrefs")
+      .lean()
+      .exec();
+
+    if (!membership) return res.status(403).json({ ok: false, error: "Not a member of this community" });
+
+    const prefs = membership.notificationPrefs || {};
+    return res.json({
+      ok: true,
+      notificationPrefs: {
+        announcements: prefs.announcements !== false,
+        bible_study: prefs.bible_study !== false,
+        questions: prefs.questions !== false,
+        poll: prefs.poll !== false,
+      },
+    });
+  } catch (err) {
+    console.error("[patch notification prefs error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });

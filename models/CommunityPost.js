@@ -2,7 +2,16 @@ const mongoose = require("mongoose");
 
 const PollOptionSchema = new mongoose.Schema(
   {
-    text: { type: String, required: true, trim: true },
+    text: { type: String, trim: true, required: true },
+  },
+  { _id: false }
+);
+
+const PollSchema = new mongoose.Schema(
+  {
+    options: { type: [PollOptionSchema], default: [] },
+    allowMultiple: { type: Boolean, default: false },
+    anonymous: { type: Boolean, default: true },
   },
   { _id: false }
 );
@@ -15,58 +24,28 @@ const CommunityPostSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-
     author: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
       index: true,
     },
-
-    title: {
-      type: String,
-      required: true,
-      trim: true,
-      maxlength: 140,
-    },
-
-    body: {
-      type: String,
-      trim: true,
-      required: function () {
-        return this.type !== "poll";
-      },
-      default: "",
-    },
+    title: { type: String, required: true, trim: true },
+    body: { type: String, default: "" },
 
     type: {
       type: String,
-      enum: ["questions", "announcements", "poll", "bible_study"],
+      enum: ["announcements", "bible_study", "questions", "poll"],
       default: "bible_study",
       index: true,
     },
 
-    poll: {
-      options: {
-        type: [PollOptionSchema],
-        default: undefined,
-        validate: {
-          validator: function (opts) {
-            return this.type !== "poll" || (Array.isArray(opts) && opts.length >= 2);
-          },
-          message: "Poll must have at least 2 options.",
-        },
-      },
-      allowMultiple: { type: Boolean, default: false },
-      anonymous: { type: Boolean, default: true },
-    },
+    poll: { type: PollSchema, default: undefined },
 
     replyCount: { type: Number, default: 0 },
-    lastReplyAt: { type: Date },
   },
   { timestamps: true }
 );
 
-CommunityPostSchema.index({ community: 1, createdAt: -1 });
-
-module.exports = mongoose.model("CommunityPost", CommunityPostSchema);
+module.exports =
+  mongoose.models.CommunityPost || mongoose.model("CommunityPost", CommunityPostSchema);
