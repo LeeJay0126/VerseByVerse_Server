@@ -6,7 +6,6 @@ const Community = require("../models/Community");
 const CommunityMembership = require("../models/CommunityMembership");
 const createNotification = require("../utils/createNotifications");
 
-
 const router = express.Router();
 
 // GET /notifications?unread=true
@@ -15,9 +14,7 @@ router.get("/", requireAuth(), async (req, res) => {
     const { unread } = req.query;
     const filter = { user: req.session.userId };
 
-    if (unread === "true") {
-      filter.readAt = null;
-    }
+    if (unread === "true") filter.readAt = null;
 
     const notifications = await Notification.find(filter)
       .sort({ createdAt: -1 })
@@ -45,9 +42,7 @@ router.post("/:id/read", requireAuth(), async (req, res) => {
     );
 
     if (!notification) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Notification not found" });
+      return res.status(404).json({ ok: false, error: "Notification not found" });
     }
 
     return res.json({ ok: true, notification });
@@ -74,7 +69,7 @@ router.post("/read-all", requireAuth(), async (req, res) => {
   }
 });
 
-// DELETE /notifications
+// DELETE /notifications  (delete all)
 router.delete("/", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
@@ -82,24 +77,15 @@ router.delete("/", requireAuth(), async (req, res) => {
     const result = await Notification.deleteMany({ user: userId });
 
     if (result.deletedCount === 0) {
-      // nothing was deleted
-      return res
-        .status(400)
-        .json({ ok: false, error: "No notification to delete" });
+      return res.status(400).json({ ok: false, error: "No notification to delete" });
     }
 
-    return res.json({
-      ok: true,
-      deletedCount: result.deletedCount,
-    });
+    return res.json({ ok: true, deletedCount: result.deletedCount });
   } catch (err) {
     console.error("[notifications delete-all error]", err);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Internal server error" });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
-
 
 /**
  * POST /notifications/:id/act
@@ -115,30 +101,19 @@ router.post("/:id/act", requireAuth(), async (req, res) => {
       return res.status(400).json({ ok: false, error: "Invalid action" });
     }
 
-    const notification = await Notification.findOne({
-      _id: id,
-      user: userId,
-    }).exec();
-
+    const notification = await Notification.findOne({ _id: id, user: userId }).exec();
     if (!notification) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Notification not found" });
+      return res.status(404).json({ ok: false, error: "Notification not found" });
     }
 
     if (notification.status && notification.status !== "pending") {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Notification already handled" });
+      return res.status(400).json({ ok: false, error: "Notification already handled" });
     }
 
     const { type, community: communityId, actor: otherUserId } = notification;
 
     if (!communityId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Notification missing community context",
-      });
+      return res.status(400).json({ ok: false, error: "Notification missing community context" });
     }
 
     const community = await Community.findById(communityId).exec();
@@ -146,10 +121,7 @@ router.post("/:id/act", requireAuth(), async (req, res) => {
       notification.status = "declined";
       notification.readAt = new Date();
       await notification.save();
-      return res.status(404).json({
-        ok: false,
-        error: "Community no longer exists",
-      });
+      return res.status(404).json({ ok: false, error: "Community no longer exists" });
     }
 
     async function ensureMembership(user, role = "Member") {
@@ -173,32 +145,22 @@ router.post("/:id/act", requireAuth(), async (req, res) => {
     }
 
     if (type === "COMMUNITY_JOIN_REQUEST") {
-      // this notification goes TO owner (or leader)
-      // notification.actor = requester
-      if (!["accept", "decline"].includes(action)) {
-        return res.status(400).json({ ok: false, error: "Invalid action" });
-      }
-
       if (action === "accept") {
         if (!otherUserId) {
-          return res
-            .status(400)
-            .json({ ok: false, error: "Missing requester information" });
+          return res.status(400).json({ ok: false, error: "Missing requester information" });
         }
 
         await ensureMembership(otherUserId, "Member");
 
-        // Optional: notify requester that they were accepted
         await createNotification({
           user: otherUserId,
-          type: "COMMUNITY_INVITE", // or a new type like "COMMUNITY_JOIN_ACCEPTED"
+          type: "COMMUNITY_INVITE",
           message: `Your request to join ${community.header} was accepted.`,
           community: community._id,
           actor: userId,
         });
       }
 
-      // mark original notification as handled
       notification.status = action === "accept" ? "accepted" : "declined";
       notification.readAt = new Date();
       await notification.save();
@@ -224,33 +186,46 @@ router.post("/:id/act", requireAuth(), async (req, res) => {
   }
 });
 
-// DELETE /notifications/:id  (delete one)
+// DELETE /notifications/:id (delete one OR cascade by community)
+// - /notifications/:id?cascade=community  => deletes all notifications for that community for this user
 router.delete("/:id", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
     const { id } = req.params;
-
-    console.log("🔥 DELETE route hit", id);
+    const cascade = String(req.query.cascade || "").toLowerCase() === "community";
 
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ ok: false, error: "Invalid notification id" });
     }
 
-    const deleted = await Notification.findOneAndDelete({
-      _id: id,
-      user: userId,
-    }).lean();
+    const notif = await Notification.findOne({ _id: id, user: userId })
+      .select("_id community")
+      .lean();
 
-    if (!deleted) {
+    if (!notif) {
       return res.status(404).json({ ok: false, error: "Notification not found" });
     }
 
+    if (cascade && notif.community) {
+      const result = await Notification.deleteMany({
+        user: userId,
+        community: notif.community,
+      });
+
+      return res.json({
+        ok: true,
+        deletedCount: result.deletedCount || 0,
+        cascade: "community",
+        communityId: String(notif.community),
+      });
+    }
+
+    await Notification.deleteOne({ _id: id, user: userId });
     return res.json({ ok: true, deletedId: id });
   } catch (err) {
     console.error("[notification delete-one error]", err);
     return res.status(500).json({ ok: false, error: "Unable to delete notification" });
   }
 });
-
 
 module.exports = router;

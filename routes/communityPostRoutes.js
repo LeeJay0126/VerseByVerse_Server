@@ -6,6 +6,7 @@ const CommunityPost = require("../models/CommunityPost");
 const CommunityPollVote = require("../models/CommunityPollVote");
 const CommunityReply = require("../models/CommunityReply");
 const Notification = require("../models/Notifications");
+const User = require("../models/User");
 const requireAuth = require("../middleware/requireAuth");
 
 const router = express.Router();
@@ -14,7 +15,10 @@ const MAX_ANNOUNCEMENTS_PER_COMMUNITY = 3;
 
 const bumpCommunityActivity = async (communityId) => {
   if (!communityId) return;
-  await Community.updateOne({ _id: communityId }, { $set: { lastActivityAt: new Date() } });
+  await Community.updateOne(
+    { _id: communityId },
+    { $set: { lastActivityAt: new Date() } }
+  );
 };
 
 const canManagePost = async ({ communityId, userId, postAuthorId }) => {
@@ -30,6 +34,19 @@ const canManagePost = async ({ communityId, userId, postAuthorId }) => {
   return !!membership && (membership.role === "Owner" || membership.role === "Leader");
 };
 
+const normalizePostType = (raw) => {
+  const s = String(raw || "").trim().toLowerCase();
+  const compact = s.replace(/[\s-_]/g, "");
+
+  if (compact === "questions" || compact === "question") return "questions";
+  if (compact === "announcements" || compact === "announcement") return "announcements";
+  if (compact === "poll" || compact === "polls") return "poll";
+  if (compact === "biblestudy" || compact === "biblestudies") return "bible_study";
+
+  // no "general" anymore
+  return "bible_study";
+};
+
 const mapTypeToClass = (type) => {
   switch (type) {
     case "questions":
@@ -41,7 +58,7 @@ const mapTypeToClass = (type) => {
     case "bible_study":
       return "bible_study";
     default:
-      return "general";
+      return "bible_study";
   }
 };
 
@@ -52,12 +69,12 @@ const toSubtitle = (body) => {
   return trimmed.slice(0, 137) + "...";
 };
 
+// You’re already using this as the label — perfect.
 const typeToCategory = (t) => {
   if (t === "questions") return "Questions";
   if (t === "announcements") return "Announcements";
   if (t === "poll") return "Poll";
-  if (t === "bible_study") return "Bible Study";
-  return "General";
+  return "Bible Study";
 };
 
 const buildDisplayName = (u) => {
@@ -67,8 +84,9 @@ const buildDisplayName = (u) => {
 };
 
 const getRecipientIdsForPostType = (memberships, normalizedType, authorId) => {
-  const isAllMembers = normalizedType === "announcements" || normalizedType === "bible_study";
-  const roles = isAllMembers ? null : new Set(["Owner", "Leader"]);
+  // announcements + bible_study notify all
+  const notifyAll = normalizedType === "announcements" || normalizedType === "bible_study";
+  const roles = notifyAll ? null : new Set(["Owner", "Leader"]);
 
   const ids = [];
   for (const m of memberships || []) {
@@ -81,6 +99,11 @@ const getRecipientIdsForPostType = (memberships, normalizedType, authorId) => {
   }
 
   return [...new Set(ids)];
+};
+
+// Dedupe key ensures: per community, per post type -> max 1 notif per user
+const buildBucketKey = (communityId, postType) => {
+  return `COMMUNITY_NEW_POST:${String(communityId)}:${String(postType)}`;
 };
 
 router.get("/:id/posts", requireAuth(), async (req, res) => {
@@ -96,7 +119,9 @@ router.get("/:id/posts", requireAuth(), async (req, res) => {
       .exec();
 
     const result = posts.map((p) => {
-      const fullName = p.author ? [p.author.firstName, p.author.lastName].filter(Boolean).join(" ") : null;
+      const fullName = p.author
+        ? [p.author.firstName, p.author.lastName].filter(Boolean).join(" ")
+        : null;
 
       return {
         id: p._id,
@@ -125,11 +150,15 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
     const userId = req.session.userId;
-    const { title, body, type } = req.body || {};
 
-    const normalizedType = ["general", "questions", "announcements", "poll", "bible_study"].includes(String(type || "").toLowerCase())
-      ? String(type).toLowerCase()
-      : "general";
+    const rawTitle = req.body?.title;
+    const rawType = req.body?.type ?? req.body?.typeValue;
+    const rawBody = req.body?.body ?? req.body?.description ?? "";
+
+    const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
+    const body = typeof rawBody === "string" ? rawBody : "";
+
+    const normalizedType = normalizePostType(rawType);
 
     if (!title || (!body && normalizedType !== "poll")) {
       return res.status(400).json({ ok: false, error: "Title and body are required." });
@@ -138,7 +167,11 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
     const community = await Community.findById(communityId).exec();
     if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
-    const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
+    const membership = await CommunityMembership.findOne({
+      user: userId,
+      community: communityId,
+    }).exec();
+
     if (!membership) {
       return res.status(403).json({ ok: false, error: "You must join this community before posting." });
     }
@@ -157,7 +190,7 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
       }
     }
 
-    const pollConfig = req.body.poll;
+    const pollConfig = req.body?.poll;
 
     const post = await CommunityPost.create({
       community: communityId,
@@ -180,11 +213,10 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
 
     await bumpCommunityActivity(communityId);
 
-    const safeBody = body || "";
     const responsePost = {
       id: post._id,
       title: post.title,
-      subtitle: safeBody.length > 140 ? safeBody.slice(0, 137) + "..." : safeBody,
+      subtitle: body.length > 140 ? body.slice(0, 137) + "..." : body,
       category: typeToCategory(normalizedType),
       categoryClass: mapTypeToClass(normalizedType),
       replyCount: 0,
@@ -194,30 +226,40 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
       type: normalizedType,
     };
 
+    // ---- Notifications (dedupe by community + post type) ----
     try {
       const [memberships, authorUser] = await Promise.all([
         CommunityMembership.find({ community: communityId })
           .populate("user", "username firstName lastName")
           .select("role user")
           .exec(),
-        mongoose.model("User").findById(userId).select("username firstName lastName").lean().exec(),
+        User.findById(userId).select("username firstName lastName").lean().exec(),
       ]);
 
       const authorName = buildDisplayName(authorUser);
-      const message = `${authorName} posted “${post.title}” in ${community.header}.`;
-
+      const postTypeLabel = typeToCategory(normalizedType);
+      const message = `${authorName} posted a new ${postTypeLabel} post in ${community.header}.`;
       const recipientIds = getRecipientIdsForPostType(memberships, normalizedType, userId);
 
       if (recipientIds.length) {
-        const postId = post._id;
+        const bucketKey = buildBucketKey(community._id, normalizedType);
+
+        // remove previous notifs of SAME community + SAME post type for these recipients
+        await Notification.deleteMany({
+          user: { $in: recipientIds },
+          type: "COMMUNITY_NEW_POST",
+          community: community._id,
+          dedupeKey: bucketKey,
+        });
+
         const docs = recipientIds.map((uid) => ({
           user: uid,
           type: "COMMUNITY_NEW_POST",
           message,
           community: community._id,
           actor: userId,
-          target: { kind: "COMMUNITY_POST", id: postId },
-          dedupeKey: `COMMUNITY_NEW_POST:${String(postId)}`,
+          target: { kind: "COMMUNITY_POST", id: post._id },
+          dedupeKey: bucketKey,
           readAt: null,
           status: null,
         }));
@@ -225,8 +267,8 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
         try {
           await Notification.insertMany(docs, { ordered: false });
         } catch (e) {
-          const code = e?.code;
-          if (code !== 11000) throw e;
+          // unique index can still race; ignore duplicate key
+          if (e?.code !== 11000) throw e;
         }
       }
     } catch (notifyErr) {
@@ -254,7 +296,9 @@ router.get("/:id/posts/:postId", requireAuth(), async (req, res) => {
 
     if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
 
-    const fullName = post.author ? [post.author.firstName, post.author.lastName].filter(Boolean).join(" ") : null;
+    const fullName = post.author
+      ? [post.author.firstName, post.author.lastName].filter(Boolean).join(" ")
+      : null;
 
     let poll = null;
     let pollResults = null;
@@ -275,7 +319,9 @@ router.get("/:id/posts/:postId", requireAuth(), async (req, res) => {
       };
 
       pollResults = { counts, totalVotes };
-      myVotes = votes.filter((v) => String(v.user) === String(userId)).map((v) => v.optionIndex);
+      myVotes = votes
+        .filter((v) => String(v.user) === String(userId))
+        .map((v) => v.optionIndex);
     }
 
     return res.json({
@@ -316,7 +362,7 @@ router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
       return res.status(400).json({ ok: false, error: "Invalid id" });
     }
 
-    const { title, body, type, poll } = req.body || {};
+    const { title, body, description, type, typeValue, poll } = req.body || {};
 
     const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
     if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
@@ -328,19 +374,19 @@ router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
     });
 
     if (!allowed) {
-      return res.status(403).json({ ok: false, error: "Only the author or community leaders can edit this post." });
+      return res.status(403).json({
+        ok: false,
+        error: "Only the author or community leaders can edit this post.",
+      });
     }
 
     const nextTitle = typeof title === "string" ? title.trim() : "";
-    const nextBody = typeof body === "string" ? body : "";
+    const nextBody =
+      typeof body === "string" ? body : typeof description === "string" ? description : "";
 
-    if (!nextTitle) {
-      return res.status(400).json({ ok: false, error: "Title is required." });
-    }
+    if (!nextTitle) return res.status(400).json({ ok: false, error: "Title is required." });
 
-    const normalizedType = ["general", "questions", "announcements", "poll", "bible_study"].includes(String(type || "").toLowerCase())
-      ? String(type).toLowerCase()
-      : post.type || "general";
+    const normalizedType = normalizePostType(type ?? typeValue ?? post.type);
 
     if (normalizedType === "announcements" && post.type !== "announcements") {
       const existingAnnouncementCount = await CommunityPost.countDocuments({
@@ -368,7 +414,6 @@ router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
       post.poll = undefined;
     } else {
       post.body = nextBody || "";
-
       if (poll && Array.isArray(poll.options)) {
         post.poll = {
           options: poll.options
@@ -418,7 +463,10 @@ router.delete("/:id/posts/:postId", requireAuth(), async (req, res) => {
     });
 
     if (!allowed) {
-      return res.status(403).json({ ok: false, error: "Only the author or community leaders can delete this post." });
+      return res.status(403).json({
+        ok: false,
+        error: "Only the author or community leaders can delete this post.",
+      });
     }
 
     await Promise.all([
@@ -464,7 +512,11 @@ router.post("/:id/posts/:postId/vote", requireAuth(), async (req, res) => {
       return res.status(403).json({ ok: false, error: "You must join this community to participate in polls." });
     }
 
-    const existing = await CommunityPollVote.findOne({ post: post._id, user: userId, optionIndex }).exec();
+    const existing = await CommunityPollVote.findOne({
+      post: post._id,
+      user: userId,
+      optionIndex,
+    }).exec();
 
     if (existing) {
       await CommunityPollVote.deleteOne({ _id: existing._id });

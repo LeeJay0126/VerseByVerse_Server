@@ -41,8 +41,8 @@ const CommunityPostSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: ["general", "questions", "announcements", "poll", "bible_study"],
-      default: "general",
+      enum: ["questions", "announcements", "poll", "bible_study"],
+      default: "bible_study",
       index: true,
     },
 
