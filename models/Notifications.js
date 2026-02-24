@@ -10,10 +10,7 @@ const NotificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: [
-        "COMMUNITY_INVITE",        // you were invited
-        "COMMUNITY_JOIN_REQUEST",  // someone requested to join your community
-      ],
+      enum: ["COMMUNITY_INVITE", "COMMUNITY_JOIN_REQUEST", "COMMUNITY_NEW_POST"],
       required: true,
     },
     message: {
@@ -34,16 +31,18 @@ const NotificationSchema = new mongoose.Schema(
       index: true,
     },
     target: {
-      kind: String,
-      id: {
-        type: mongoose.Schema.Types.ObjectId,
-      },
+      kind: { type: String },
+      id: { type: mongoose.Schema.Types.ObjectId },
     },
-    
+    dedupeKey: {
+      type: String,
+      default: null,
+      index: true,
+    },
     status: {
       type: String,
       enum: ["pending", "accepted", "declined"],
-      default: "pending",
+      default: null,
       index: true,
     },
   },
@@ -51,5 +50,7 @@ const NotificationSchema = new mongoose.Schema(
 );
 
 NotificationSchema.index({ user: 1, readAt: 1, createdAt: -1 });
+NotificationSchema.index({ user: 1, dedupeKey: 1 }, { unique: true, sparse: true });
+NotificationSchema.index({ "target.kind": 1, "target.id": 1 });
 
 module.exports = mongoose.model("Notification", NotificationSchema);

@@ -1,4 +1,3 @@
-// models/CommunityPost.js
 const mongoose = require("mongoose");
 
 const PollOptionSchema = new mongoose.Schema(
@@ -31,7 +30,6 @@ const CommunityPostSchema = new mongoose.Schema(
       maxlength: 140,
     },
 
-    // Only required for non-poll posts
     body: {
       type: String,
       trim: true,
@@ -41,19 +39,17 @@ const CommunityPostSchema = new mongoose.Schema(
       default: "",
     },
 
-    // Tag / category
     type: {
       type: String,
-      enum: ["general", "questions", "announcements", "poll"],
+      enum: ["general", "questions", "announcements", "poll", "bible_study"],
       default: "general",
       index: true,
     },
 
-    // Poll config (only used when type === "poll")
     poll: {
       options: {
         type: [PollOptionSchema],
-        default: undefined, 
+        default: undefined,
         validate: {
           validator: function (opts) {
             return this.type !== "poll" || (Array.isArray(opts) && opts.length >= 2);
@@ -71,7 +67,6 @@ const CommunityPostSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Common query pattern: list posts for a community newest-first
 CommunityPostSchema.index({ community: 1, createdAt: -1 });
 
 module.exports = mongoose.model("CommunityPost", CommunityPostSchema);
