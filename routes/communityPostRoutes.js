@@ -15,19 +15,13 @@ const MAX_ANNOUNCEMENTS_PER_COMMUNITY = 3;
 
 const bumpCommunityActivity = async (communityId) => {
   if (!communityId) return;
-  await Community.updateOne(
-    { _id: communityId },
-    { $set: { lastActivityAt: new Date() } }
-  );
+  await Community.updateOne({ _id: communityId }, { $set: { lastActivityAt: new Date() } });
 };
 
 const canManagePost = async ({ communityId, userId, postAuthorId }) => {
   if (String(postAuthorId) === String(userId)) return true;
 
-  const membership = await CommunityMembership.findOne({
-    community: communityId,
-    user: userId,
-  })
+  const membership = await CommunityMembership.findOne({ community: communityId, user: userId })
     .select("role")
     .lean();
 
@@ -43,7 +37,6 @@ const normalizePostType = (raw) => {
   if (compact === "poll" || compact === "polls") return "poll";
   if (compact === "biblestudy" || compact === "biblestudies") return "bible_study";
 
-  // no "general" anymore
   return "bible_study";
 };
 
@@ -69,7 +62,6 @@ const toSubtitle = (body) => {
   return trimmed.slice(0, 137) + "...";
 };
 
-// You’re already using this as the label — perfect.
 const typeToCategory = (t) => {
   if (t === "questions") return "Questions";
   if (t === "announcements") return "Announcements";
@@ -83,27 +75,27 @@ const buildDisplayName = (u) => {
   return fullName || u.username || "A member";
 };
 
-const getRecipientIdsForPostType = (memberships, normalizedType, authorId) => {
-  // announcements + bible_study notify all
-  const notifyAll = normalizedType === "announcements" || normalizedType === "bible_study";
-  const roles = notifyAll ? null : new Set(["Owner", "Leader"]);
-
-  const ids = [];
-  for (const m of memberships || []) {
-    const uid = m?.user?._id;
-    const role = m?.role;
-    if (!uid) continue;
-    if (String(uid) === String(authorId)) continue;
-    if (roles && !roles.has(role)) continue;
-    ids.push(String(uid));
-  }
-
-  return [...new Set(ids)];
-};
-
-// Dedupe key ensures: per community, per post type -> max 1 notif per user
 const buildBucketKey = (communityId, postType) => {
   return `COMMUNITY_NEW_POST:${String(communityId)}:${String(postType)}`;
+};
+
+const shouldNotifyUserForType = (membership, postType) => {
+  const prefs = membership?.notificationPrefs || null;
+  if (!prefs) return true;
+  if (!Object.prototype.hasOwnProperty.call(prefs, postType)) return true;
+  return prefs[postType] !== false;
+};
+
+const getRecipientIdsForPostType = (memberships, normalizedType, authorId) => {
+  const ids = [];
+  for (const m of memberships || []) {
+    const uid = m?.user;
+    if (!uid) continue;
+    if (String(uid) === String(authorId)) continue;
+    if (!shouldNotifyUserForType(m, normalizedType)) continue;
+    ids.push(String(uid));
+  }
+  return [...new Set(ids)];
 };
 
 router.get("/:id/posts", requireAuth(), async (req, res) => {
@@ -167,11 +159,7 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
     const community = await Community.findById(communityId).exec();
     if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
-    const membership = await CommunityMembership.findOne({
-      user: userId,
-      community: communityId,
-    }).exec();
-
+    const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership) {
       return res.status(403).json({ ok: false, error: "You must join this community before posting." });
     }
@@ -213,61 +201,50 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
 
     await bumpCommunityActivity(communityId);
 
-    const responsePost = {
-      id: post._id,
-      title: post.title,
-      subtitle: body.length > 140 ? body.slice(0, 137) + "..." : body,
-      category: typeToCategory(normalizedType),
-      categoryClass: mapTypeToClass(normalizedType),
-      replyCount: 0,
-      activityText: post.createdAt,
-      createdAt: post.createdAt,
-      updatedAt: post.updatedAt,
-      type: normalizedType,
-    };
-
-    // ---- Notifications (dedupe by community + post type) ----
     try {
       const [memberships, authorUser] = await Promise.all([
-        CommunityMembership.find({ community: communityId })
-          .populate("user", "username firstName lastName")
-          .select("role user")
-          .exec(),
+        CommunityMembership.find({ community: communityId }).select("user notificationPrefs").lean().exec(),
         User.findById(userId).select("username firstName lastName").lean().exec(),
       ]);
 
       const authorName = buildDisplayName(authorUser);
       const postTypeLabel = typeToCategory(normalizedType);
       const message = `${authorName} posted a new ${postTypeLabel} post in ${community.header}.`;
+
       const recipientIds = getRecipientIdsForPostType(memberships, normalizedType, userId);
 
       if (recipientIds.length) {
         const bucketKey = buildBucketKey(community._id, normalizedType);
 
-        // remove previous notifs of SAME community + SAME post type for these recipients
-        await Notification.deleteMany({
-          user: { $in: recipientIds },
-          type: "COMMUNITY_NEW_POST",
-          community: community._id,
-          dedupeKey: bucketKey,
-        });
-
-        const docs = recipientIds.map((uid) => ({
-          user: uid,
-          type: "COMMUNITY_NEW_POST",
-          message,
-          community: community._id,
-          actor: userId,
-          target: { kind: "COMMUNITY_POST", id: post._id },
-          dedupeKey: bucketKey,
-          readAt: null,
-          status: null,
+        const ops = recipientIds.map((uid) => ({
+          updateOne: {
+            filter: {
+              user: uid,
+              type: "COMMUNITY_NEW_POST",
+              community: community._id,
+              dedupeKey: bucketKey,
+            },
+            update: {
+              $set: {
+                user: uid,
+                type: "COMMUNITY_NEW_POST",
+                message,
+                community: community._id,
+                actor: userId,
+                target: { kind: "COMMUNITY_POST", id: post._id },
+                dedupeKey: bucketKey,
+                readAt: null,
+                status: null,
+              },
+              $setOnInsert: { createdAt: new Date() },
+            },
+            upsert: true,
+          },
         }));
 
         try {
-          await Notification.insertMany(docs, { ordered: false });
+          await Notification.bulkWrite(ops, { ordered: false });
         } catch (e) {
-          // unique index can still race; ignore duplicate key
           if (e?.code !== 11000) throw e;
         }
       }
@@ -275,7 +252,7 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
       console.error("[create community post notification error]", notifyErr);
     }
 
-    return res.status(201).json({ ok: true, post: responsePost });
+    return res.status(201).json({ ok: true });
   } catch (err) {
     console.error("[create community post error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
@@ -319,9 +296,7 @@ router.get("/:id/posts/:postId", requireAuth(), async (req, res) => {
       };
 
       pollResults = { counts, totalVotes };
-      myVotes = votes
-        .filter((v) => String(v.user) === String(userId))
-        .map((v) => v.optionIndex);
+      myVotes = votes.filter((v) => String(v.user) === String(userId)).map((v) => v.optionIndex);
     }
 
     return res.json({
@@ -367,22 +342,13 @@ router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
     const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
     if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
 
-    const allowed = await canManagePost({
-      communityId,
-      userId,
-      postAuthorId: post.author,
-    });
-
+    const allowed = await canManagePost({ communityId, userId, postAuthorId: post.author });
     if (!allowed) {
-      return res.status(403).json({
-        ok: false,
-        error: "Only the author or community leaders can edit this post.",
-      });
+      return res.status(403).json({ ok: false, error: "Only the author or community leaders can edit this post." });
     }
 
     const nextTitle = typeof title === "string" ? title.trim() : "";
-    const nextBody =
-      typeof body === "string" ? body : typeof description === "string" ? description : "";
+    const nextBody = typeof body === "string" ? body : typeof description === "string" ? description : "";
 
     if (!nextTitle) return res.status(400).json({ ok: false, error: "Title is required." });
 
@@ -416,9 +382,7 @@ router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
       post.body = nextBody || "";
       if (poll && Array.isArray(poll.options)) {
         post.poll = {
-          options: poll.options
-            .map((o) => ({ text: String(o?.text ?? o).trim() }))
-            .filter((o) => o.text),
+          options: poll.options.map((o) => ({ text: String(o?.text ?? o).trim() })).filter((o) => o.text),
           allowMultiple: !!poll.allowMultiple,
           anonymous: poll.anonymous !== false,
         };
@@ -430,13 +394,7 @@ router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
 
     return res.json({
       ok: true,
-      post: {
-        id: post._id,
-        title: post.title,
-        body: post.body,
-        type: post.type,
-        updatedAt: post.updatedAt,
-      },
+      post: { id: post._id, title: post.title, body: post.body, type: post.type, updatedAt: post.updatedAt },
     });
   } catch (err) {
     console.error("[edit community post error]", err);
@@ -456,17 +414,9 @@ router.delete("/:id/posts/:postId", requireAuth(), async (req, res) => {
     const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
     if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
 
-    const allowed = await canManagePost({
-      communityId,
-      userId,
-      postAuthorId: post.author,
-    });
-
+    const allowed = await canManagePost({ communityId, userId, postAuthorId: post.author });
     if (!allowed) {
-      return res.status(403).json({
-        ok: false,
-        error: "Only the author or community leaders can delete this post.",
-      });
+      return res.status(403).json({ ok: false, error: "Only the author or community leaders can delete this post." });
     }
 
     await Promise.all([
@@ -512,11 +462,7 @@ router.post("/:id/posts/:postId/vote", requireAuth(), async (req, res) => {
       return res.status(403).json({ ok: false, error: "You must join this community to participate in polls." });
     }
 
-    const existing = await CommunityPollVote.findOne({
-      post: post._id,
-      user: userId,
-      optionIndex,
-    }).exec();
+    const existing = await CommunityPollVote.findOne({ post: post._id, user: userId, optionIndex }).exec();
 
     if (existing) {
       await CommunityPollVote.deleteOne({ _id: existing._id });

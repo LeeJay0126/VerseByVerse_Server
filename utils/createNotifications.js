@@ -1,21 +1,35 @@
 const Notification = require("../models/Notifications");
 
-async function createNotification({
-  user,        
+module.exports = async function createNotification({
+  user,
   type,
   message,
-  community,
-  actor,
-  target,
+  community = null,
+  actor = null,
+  target = null,
+  dedupeKey = null,
 }) {
-  return Notification.create({
+  const doc = {
     user,
     type,
     message,
     community,
     actor,
-    target,
-  });
-}
+    target: target && target.kind ? target : null,
+    dedupeKey: dedupeKey || null,
+    readAt: null,
+    status: null,
+  };
 
-module.exports = createNotification;
+  if (doc.dedupeKey) {
+    const updated = await Notification.findOneAndUpdate(
+      { user: doc.user, type: doc.type, community: doc.community, dedupeKey: doc.dedupeKey },
+      { $set: doc },
+      { new: true, upsert: true }
+    ).lean();
+    return updated;
+  }
+
+  const created = await Notification.create(doc);
+  return created;
+};
