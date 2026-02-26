@@ -4,11 +4,34 @@ const requireAuth = require("../middleware/requireAuth");
 const Notification = require("../models/Notifications");
 const Community = require("../models/Community");
 const CommunityMembership = require("../models/CommunityMembership");
+const CommunityJoinRequest = require("../models/CommunityJoinRequest");
 const createNotification = require("../utils/createNotifications");
 
 const router = express.Router();
 
-// GET /notifications?unread=true
+const getUserId = (req) => String(req.session?.userId || "");
+
+const isOwner = (community, userId) => {
+  const ownerId = String(community?.owner?._id || community?.owner || "");
+  return ownerId && ownerId === String(userId);
+};
+
+const getMembership = async (userId, communityId) => {
+  if (!userId || !communityId) return null;
+  return CommunityMembership.findOne({ user: userId, community: communityId }).exec();
+};
+
+const canManageMembers = async (userId, community) => {
+  if (!userId || !community) return false;
+  if (isOwner(community, userId)) return true;
+
+  const membership = await getMembership(userId, community._id);
+  if (!membership) return false;
+
+  const leadersAllowed = Boolean(community?.settings?.leadersCanManageMembers);
+  return leadersAllowed && membership.role === "Leader";
+};
+
 router.get("/", requireAuth(), async (req, res) => {
   try {
     const { unread } = req.query;
@@ -29,7 +52,6 @@ router.get("/", requireAuth(), async (req, res) => {
   }
 });
 
-// POST /notifications/:id/read
 router.post("/:id/read", requireAuth(), async (req, res) => {
   try {
     const { id } = req.params;
@@ -52,7 +74,6 @@ router.post("/:id/read", requireAuth(), async (req, res) => {
   }
 });
 
-// POST /notifications/read-all
 router.post("/read-all", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
@@ -69,7 +90,6 @@ router.post("/read-all", requireAuth(), async (req, res) => {
   }
 });
 
-// DELETE /notifications  (delete all)
 router.delete("/", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
@@ -87,10 +107,6 @@ router.delete("/", requireAuth(), async (req, res) => {
   }
 });
 
-/**
- * POST /notifications/:id/act
- * Body: { action: "accept" | "decline" }
- */
 router.post("/:id/act", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
@@ -138,6 +154,7 @@ router.post("/:id/act", requireAuth(), async (req, res) => {
         });
 
         community.membersCount = (community.membersCount || 0) + 1;
+        community.lastActivityAt = new Date();
         await community.save();
       }
 
@@ -145,26 +162,64 @@ router.post("/:id/act", requireAuth(), async (req, res) => {
     }
 
     if (type === "COMMUNITY_JOIN_REQUEST") {
-      if (action === "accept") {
-        if (!otherUserId) {
-          return res.status(400).json({ ok: false, error: "Missing requester information" });
-        }
+      const canManage = await canManageMembers(String(userId), community);
+      if (!canManage) return res.status(403).json({ ok: false, error: "Forbidden" });
 
+      const requestId =
+        notification?.target?.kind === "COMMUNITY_JOIN_REQUEST" && notification?.target?.id
+          ? String(notification.target.id)
+          : null;
+
+      if (!otherUserId) {
+        return res.status(400).json({ ok: false, error: "Missing requester information" });
+      }
+
+      if (action === "accept") {
         await ensureMembership(otherUserId, "Member");
+
+        if (requestId && mongoose.isValidObjectId(requestId)) {
+          await CommunityJoinRequest.updateOne(
+            { _id: requestId, community: community._id },
+            { $set: { status: "accepted", handledBy: userId, handledAt: new Date() } }
+          );
+        }
 
         await createNotification({
           user: otherUserId,
-          type: "COMMUNITY_INVITE",
+          type: "COMMUNITY_JOIN_REQUEST_RESULT",
           message: `Your request to join ${community.header} was accepted.`,
           community: community._id,
           actor: userId,
+          status: null,
+        });
+      }
+
+      if (action === "decline") {
+        if (requestId && mongoose.isValidObjectId(requestId)) {
+          await CommunityJoinRequest.updateOne(
+            { _id: requestId, community: community._id },
+            { $set: { status: "rejected", handledBy: userId, handledAt: new Date() } }
+          );
+        }
+
+        await createNotification({
+          user: otherUserId,
+          type: "COMMUNITY_JOIN_REQUEST_RESULT",
+          message: `Your request to join ${community.header} was declined.`,
+          community: community._id,
+          actor: userId,
+          status: null,
         });
       }
 
       notification.status = action === "accept" ? "accepted" : "declined";
       notification.readAt = new Date();
       await notification.save();
-    } else if (type === "COMMUNITY_INVITE") {
+
+      return res.json({ ok: true, notification: notification.toObject ? notification.toObject() : notification });
+    }
+
+    if (type === "COMMUNITY_INVITE") {
       if (action === "accept") {
         await ensureMembership(userId, "Member");
       }
@@ -172,22 +227,20 @@ router.post("/:id/act", requireAuth(), async (req, res) => {
       notification.status = action === "accept" ? "accepted" : "declined";
       notification.readAt = new Date();
       await notification.save();
-    } else {
-      return res.status(400).json({
-        ok: false,
-        error: "Action not supported for this notification type",
-      });
+
+      return res.json({ ok: true, notification: notification.toObject ? notification.toObject() : notification });
     }
 
-    return res.json({ ok: true, notification });
+    return res.status(400).json({
+      ok: false,
+      error: "Action not supported for this notification type",
+    });
   } catch (err) {
     console.error("[notification act error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
-// DELETE /notifications/:id (delete one OR cascade by community)
-// - /notifications/:id?cascade=community  => deletes all notifications for that community for this user
 router.delete("/:id", requireAuth(), async (req, res) => {
   try {
     const userId = req.session.userId;
