@@ -8,7 +8,11 @@ module.exports = async function createNotification({
   actor = null,
   target = null,
   dedupeKey = null,
+  status = null,
 }) {
+  const actionable = type === "COMMUNITY_INVITE" || type === "COMMUNITY_JOIN_REQUEST";
+  const nextStatus = status || (actionable ? "pending" : null);
+
   const doc = {
     user,
     type,
@@ -18,7 +22,7 @@ module.exports = async function createNotification({
     target: target && target.kind ? target : null,
     dedupeKey: dedupeKey || null,
     readAt: null,
-    status: null,
+    status: nextStatus,
   };
 
   if (doc.dedupeKey) {
