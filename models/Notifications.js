@@ -16,7 +16,7 @@ const NotificationSchema = new mongoose.Schema(
     community: { type: mongoose.Schema.Types.ObjectId, ref: "Community", default: null, index: true },
     actor: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
     target: { type: TargetSchema, default: null },
-    dedupeKey: { type: String, default: null, index: true },
+    dedupeKey: { type: String, default: undefined, trim: true },
     readAt: { type: Date, default: null, index: true },
     status: { type: String, default: null },
   },
@@ -25,7 +25,12 @@ const NotificationSchema = new mongoose.Schema(
 
 NotificationSchema.index(
   { user: 1, type: 1, community: 1, dedupeKey: 1 },
-  { unique: true, sparse: true }
+  {
+    unique: true,
+    partialFilterExpression: {
+      dedupeKey: { $exists: true, $type: "string" },
+    },
+  }
 );
 
 module.exports = mongoose.model("Notification", NotificationSchema);
