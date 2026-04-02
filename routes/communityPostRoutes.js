@@ -8,6 +8,7 @@ const CommunityReply = require("../models/CommunityReply");
 const Notification = require("../models/Notifications");
 const User = require("../models/User");
 const requireAuth = require("../middleware/requireAuth");
+const { sanitizePagination } = require("../utils/bibleStudySubmission");
 
 const router = express.Router();
 
@@ -55,11 +56,82 @@ const mapTypeToClass = (type) => {
   }
 };
 
-const toSubtitle = (body) => {
-  if (!body) return "";
-  const trimmed = body.trim();
-  if (trimmed.length <= 140) return trimmed;
-  return trimmed.slice(0, 137) + "...";
+const trimString = (value) => (typeof value === "string" ? value.trim() : "");
+
+const truncate = (value, max = 140) => {
+  const text = trimString(value);
+  if (!text) return "";
+  if (text.length <= max) return text;
+  return text.slice(0, max - 3) + "...";
+};
+
+const toSubtitle = (body) => truncate(body, 140);
+
+const normalizePassage = (raw) => {
+  const next = raw && typeof raw === "object" ? raw : {};
+
+  const chapterNumber = Number(next.chapterNumber);
+  const rangeStart = Number(next.rangeStart);
+  const rangeEnd = Number(next.rangeEnd);
+
+  return {
+    versionId: trimString(next.versionId),
+    versionLabel: trimString(next.versionLabel),
+    bookId: trimString(next.bookId),
+    bookName: trimString(next.bookName),
+    chapterId: trimString(next.chapterId),
+    chapterNumber: Number.isFinite(chapterNumber) ? chapterNumber : null,
+    rangeStart: Number.isFinite(rangeStart) ? rangeStart : null,
+    rangeEnd: Number.isFinite(rangeEnd) ? rangeEnd : null,
+    referenceLabel: trimString(next.referenceLabel),
+  };
+};
+
+const normalizePassageSnapshot = (raw) => {
+  const verses = Array.isArray(raw?.verses) ? raw.verses : [];
+  return {
+    verses: verses
+      .map((verse) => ({
+        number: Number(verse?.number),
+        text: trimString(verse?.text),
+      }))
+      .filter((verse) => Number.isFinite(verse.number) && verse.text),
+  };
+};
+
+const normalizeStudyContent = (raw) => {
+  const next = raw && typeof raw === "object" ? raw : {};
+  return {
+    leaderNotes: trimString(next.leaderNotes),
+    reflection: trimString(next.reflection),
+    questions: Array.isArray(next.questions)
+      ? next.questions.map((item) => trimString(item)).filter(Boolean)
+      : [],
+  };
+};
+
+const hasBibleStudyBody = ({ body, studyContent }) => {
+  return Boolean(
+    trimString(body) ||
+      trimString(studyContent?.leaderNotes) ||
+      trimString(studyContent?.reflection)
+  );
+};
+
+const getBibleStudySubtitle = (post) => {
+  const referenceLabel = trimString(post?.passage?.referenceLabel);
+  const preview =
+    trimString(post?.body) ||
+    trimString(post?.studyContent?.leaderNotes) ||
+    trimString(post?.studyContent?.reflection);
+
+  if (referenceLabel && preview) {
+    return truncate(`${referenceLabel} — ${preview}`, 140);
+  }
+
+  if (referenceLabel) return truncate(referenceLabel, 140);
+  if (preview) return truncate(preview, 140);
+  return "";
 };
 
 const typeToCategory = (t) => {
@@ -98,9 +170,16 @@ const getRecipientIdsForPostType = (memberships, normalizedType, authorId) => {
   return [...new Set(ids)];
 };
 
+
+
 router.get("/:id/posts", requireAuth(), async (req, res) => {
   try {
     const { id: communityId } = req.params;
+    const { page, limit } = sanitizePagination({
+      page: req.query.page,
+      limit: req.query.limit,
+      maxLimit: 30,
+    });
 
     const community = await Community.findById(communityId).exec();
     if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
@@ -110,28 +189,51 @@ router.get("/:id/posts", requireAuth(), async (req, res) => {
       .populate("author", "username firstName lastName")
       .exec();
 
-    const result = posts.map((p) => {
-      const fullName = p.author
-        ? [p.author.firstName, p.author.lastName].filter(Boolean).join(" ")
-        : null;
+    const mapped = posts
+      .map((p) => {
+        const fullName = p.author
+          ? [p.author.firstName, p.author.lastName].filter(Boolean).join(" ")
+          : null;
 
-      return {
-        id: p._id,
-        title: p.title,
-        subtitle: toSubtitle(p.body),
-        category: typeToCategory(p.type),
-        categoryClass: mapTypeToClass(p.type),
-        replyCount: p.replyCount || 0,
-        activityText: p.updatedAt || p.createdAt,
-        author: fullName || p.author?.username || "Unknown",
-        authorId: p.author?._id ? String(p.author._id) : null,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
-        type: p.type,
-      };
+        const subtitle =
+          p.type === "bible_study" ? getBibleStudySubtitle(p) : toSubtitle(p.body);
+
+        return {
+          id: p._id,
+          title: p.title,
+          subtitle,
+          category: typeToCategory(p.type),
+          categoryClass: mapTypeToClass(p.type),
+          replyCount: p.replyCount || 0,
+          activityText: p.updatedAt || p.createdAt,
+          author: fullName || p.author?.username || "Unknown",
+          authorId: p.author?._id ? String(p.author._id) : null,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+          type: p.type,
+        };
+      })
+      .sort((a, b) => {
+        const aPinned = a.type === "announcements" ? 1 : 0;
+        const bPinned = b.type === "announcements" ? 1 : 0;
+        if (aPinned !== bPinned) return bPinned - aPinned;
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+
+    const totalCount = mapped.length;
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * limit;
+    const result = mapped.slice(start, start + limit);
+
+    return res.json({
+      ok: true,
+      posts: result,
+      page: safePage,
+      limit,
+      totalCount,
+      totalPages,
     });
-
-    return res.json({ ok: true, posts: result });
   } catch (err) {
     console.error("[get community posts error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
@@ -152,16 +254,19 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
 
     const normalizedType = normalizePostType(rawType);
 
-    if (!title || (!body && normalizedType !== "poll")) {
-      return res.status(400).json({ ok: false, error: "Title and body are required." });
-    }
-
     const community = await Community.findById(communityId).exec();
     if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
 
     const membership = await CommunityMembership.findOne({ user: userId, community: communityId }).exec();
     if (!membership) {
       return res.status(403).json({ ok: false, error: "You must join this community before posting." });
+    }
+
+    if (normalizedType === "bible_study" && membership.role !== "Owner" && membership.role !== "Leader") {
+      return res.status(403).json({
+        ok: false,
+        error: "Only community leaders or the owner can create Bible Study posts.",
+      });
     }
 
     if (normalizedType === "announcements") {
@@ -179,6 +284,38 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
     }
 
     const pollConfig = req.body?.poll;
+    const passage = normalizedType === "bible_study" ? normalizePassage(req.body?.passage) : undefined;
+    const passageSnapshot =
+      normalizedType === "bible_study" ? normalizePassageSnapshot(req.body?.passageSnapshot) : undefined;
+    const studyContent =
+      normalizedType === "bible_study" ? normalizeStudyContent(req.body?.studyContent) : undefined;
+
+    if (!title) {
+      return res.status(400).json({ ok: false, error: "Title is required." });
+    }
+
+    if (normalizedType === "poll") {
+      const cleanedOptions = (pollConfig?.options || [])
+        .map((text) => ({ text: String(text).trim() }))
+        .filter((option) => option.text);
+
+      if (cleanedOptions.length < 2) {
+        return res.status(400).json({ ok: false, error: "Please provide at least two poll options." });
+      }
+    } else if (normalizedType === "bible_study") {
+      if (!passage?.referenceLabel || !passageSnapshot?.verses?.length) {
+        return res.status(400).json({ ok: false, error: "A Bible Study post requires a valid passage." });
+      }
+
+      if (!hasBibleStudyBody({ body, studyContent })) {
+        return res.status(400).json({
+          ok: false,
+          error: "Add an opening note, leader notes, or reflection before publishing.",
+        });
+      }
+    } else if (!body || !body.trim()) {
+      return res.status(400).json({ ok: false, error: "Title and body are required." });
+    }
 
     const post = await CommunityPost.create({
       community: communityId,
@@ -195,6 +332,13 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
               allowMultiple: !!pollConfig.allowMultiple,
               anonymous: pollConfig.anonymous !== false,
             },
+          }
+        : {}),
+      ...(normalizedType === "bible_study"
+        ? {
+            passage,
+            passageSnapshot,
+            studyContent,
           }
         : {}),
     });
@@ -252,7 +396,7 @@ router.post("/:id/posts", requireAuth(), async (req, res) => {
       console.error("[create community post notification error]", notifyErr);
     }
 
-    return res.status(201).json({ ok: true });
+    return res.status(201).json({ ok: true, postId: String(post._id) });
   } catch (err) {
     console.error("[create community post error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
@@ -314,6 +458,9 @@ router.get("/:id/posts/:postId", requireAuth(), async (req, res) => {
         poll,
         pollResults,
         myVotes,
+        passage: post.passage || null,
+        passageSnapshot: post.passageSnapshot || null,
+        studyContent: post.studyContent || null,
       },
       community: {
         id: community._id,
@@ -372,13 +519,7 @@ router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
     post.title = nextTitle;
     post.type = normalizedType;
 
-    if (normalizedType !== "poll") {
-      if (!nextBody || !nextBody.trim()) {
-        return res.status(400).json({ ok: false, error: "Body is required." });
-      }
-      post.body = nextBody;
-      post.poll = undefined;
-    } else {
+    if (normalizedType === "poll") {
       post.body = nextBody || "";
       if (poll && Array.isArray(poll.options)) {
         post.poll = {
@@ -387,6 +528,49 @@ router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
           anonymous: poll.anonymous !== false,
         };
       }
+      post.passage = undefined;
+      post.passageSnapshot = undefined;
+      post.studyContent = undefined;
+    } else if (normalizedType === "bible_study") {
+      if (!nextBody.trim() && !trimString(post?.studyContent?.leaderNotes) && !trimString(post?.studyContent?.reflection)) {
+        return res.status(400).json({
+          ok: false,
+          error: "Bible Study posts require some written content.",
+        });
+      }
+
+      post.body = nextBody;
+
+      if (req.body?.passage) {
+        const nextPassage = normalizePassage(req.body.passage);
+        if (!nextPassage.referenceLabel) {
+          return res.status(400).json({ ok: false, error: "A valid passage is required." });
+        }
+        post.passage = nextPassage;
+      }
+
+      if (req.body?.passageSnapshot) {
+        const nextSnapshot = normalizePassageSnapshot(req.body.passageSnapshot);
+        if (!nextSnapshot.verses.length) {
+          return res.status(400).json({ ok: false, error: "A valid passage snapshot is required." });
+        }
+        post.passageSnapshot = nextSnapshot;
+      }
+
+      if (req.body?.studyContent) {
+        post.studyContent = normalizeStudyContent(req.body.studyContent);
+      }
+
+      post.poll = undefined;
+    } else {
+      if (!nextBody || !nextBody.trim()) {
+        return res.status(400).json({ ok: false, error: "Body is required." });
+      }
+      post.body = nextBody;
+      post.poll = undefined;
+      post.passage = undefined;
+      post.passageSnapshot = undefined;
+      post.studyContent = undefined;
     }
 
     await post.save();
@@ -394,7 +578,16 @@ router.put("/:id/posts/:postId", requireAuth(), async (req, res) => {
 
     return res.json({
       ok: true,
-      post: { id: post._id, title: post.title, body: post.body, type: post.type, updatedAt: post.updatedAt },
+      post: {
+        id: post._id,
+        title: post.title,
+        body: post.body,
+        type: post.type,
+        updatedAt: post.updatedAt,
+        passage: post.passage || null,
+        passageSnapshot: post.passageSnapshot || null,
+        studyContent: post.studyContent || null,
+      },
     });
   } catch (err) {
     console.error("[edit community post error]", err);

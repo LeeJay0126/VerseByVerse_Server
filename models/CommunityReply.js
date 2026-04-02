@@ -17,6 +17,11 @@ const CommunityReplySchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    studySubmission: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "BibleStudySubmission",
+      default: null,
+    },
     body: {
       type: String,
       required: true,
