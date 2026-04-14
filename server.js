@@ -29,6 +29,10 @@ const {
 } = process.env;
 
 const isProduction = NODE_ENV === "production";
+const PRODUCTION_WEB_ORIGINS = [
+  "https://versebyverse.website",
+  "https://www.versebyverse.website",
+];
 
 function normalizeOrigin(value) {
   return String(value || "").trim().replace(/\/$/, "");
@@ -45,7 +49,34 @@ function parseOriginList(...values) {
   );
 }
 
-const allowedOrigins = parseOriginList(CLIENT_ORIGIN, CLIENT_ORIGINS);
+const allowedOrigins = parseOriginList(
+  CLIENT_ORIGIN,
+  CLIENT_ORIGINS,
+  ...(isProduction ? PRODUCTION_WEB_ORIGINS : [])
+);
+
+function getMongoUri() {
+  const rawValue = String(MONGO_URI || "");
+  const mongoUri = rawValue.trim();
+
+  if (!mongoUri) {
+    throw new Error(
+      "MONGO_URI is not set. Expected a full MongoDB connection string starting with mongodb:// or mongodb+srv://"
+    );
+  }
+
+  if (rawValue !== mongoUri) {
+    throw new Error("MONGO_URI has leading or trailing whitespace. Remove any extra spaces or line breaks.");
+  }
+
+  if (!/^mongodb(\+srv)?:\/\//.test(mongoUri)) {
+    throw new Error(
+      "MONGO_URI must start with mongodb:// or mongodb+srv://. Check the value in your .env file."
+    );
+  }
+
+  return mongoUri;
+}
 
 function isLanOrigin(origin) {
   try {
@@ -70,8 +101,11 @@ console.log("HOST =", HOST);
 console.log("ALLOWED_ORIGINS =", allowedOrigins);
 console.log("MONGO_URI present? ", !!MONGO_URI);
 
-if (!MONGO_URI) {
-  console.error("❌ MONGO_URI is not set");
+let mongoUri;
+try {
+  mongoUri = getMongoUri();
+} catch (error) {
+  console.error(`ERROR: ${error.message}`);
   process.exit(1);
 }
 
@@ -109,12 +143,11 @@ app.options(/.*/, cors(corsOptions));
 
 app.use((req, _res, next) => {
   if (req.method === "OPTIONS") {
-    console.log("❌ OPTIONS fell through:", req.originalUrl);
+    console.log("OPTIONS fell through:", req.originalUrl);
   }
   next();
 });
 
-/* ---------- middleware ---------- */
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
@@ -126,7 +159,6 @@ if (TRUST_PROXY) {
   app.set("trust proxy", isProduction ? 1 : false);
 }
 
-/* ---------- session ---------- */
 app.use(
   session({
     name: "connect.sid",
@@ -134,7 +166,7 @@ app.use(
     resave: false,
     saveUninitialized: false,
     store: MongoStore.create({
-      mongoUrl: MONGO_URI,
+      mongoUrl: mongoUri,
       collectionName: "sessions",
       ttl: 60 * 60 * 2,
     }),
@@ -147,8 +179,7 @@ app.use(
   })
 );
 
-/* ---------- routes ---------- */
-app.get("/health", (_req, res) => res.json({ ok: true, status: "up" }));
+app.get("/health", (_req, res) => res.status(200).json({ ok: true, status: "up" }));
 
 app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
@@ -161,25 +192,29 @@ app.use("/notes", notesRoutes);
 
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-/* ---------- error handler ---------- */
 app.use((err, _req, res, _next) => {
   console.error("[unhandled error]", err);
   res.status(500).json({ ok: false, error: err.message });
 });
 
-/* ---------- connect + listen ---------- */
 (async () => {
   try {
     console.log(">>> connecting to MongoDB...");
     mongoose.set("strictQuery", true);
-    await mongoose.connect(MONGO_URI);
-    console.log("✅ MongoDB connected");
+    await mongoose.connect(mongoUri);
+    console.log("MongoDB connected");
 
     app.listen(PORT, HOST, () => {
-      console.log(`✅ LISTENING: http://${HOST}:${PORT}`);
+      console.log(`LISTENING: http://${HOST}:${PORT}`);
     });
   } catch (e) {
-    console.error("❌ startup failed:", e);
+    console.error("ERROR: startup failed:", e?.message || e);
+    if (e?.message?.includes("Invalid scheme")) {
+      console.error("ERROR: MONGO_URI must use mongodb:// or mongodb+srv://");
+    }
+    if (e?.message?.includes("bad auth") || e?.message?.includes("Authentication failed")) {
+      console.error("ERROR: Check the MongoDB username, password, and authSource in MONGO_URI");
+    }
     process.exit(1);
   }
 })();
