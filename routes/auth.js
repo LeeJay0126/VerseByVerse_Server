@@ -3,7 +3,13 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const User = require("../models/User");
 const zxcvbn = require("zxcvbn");
-const { sendMail, buildVerifyEmail } = require("../utils/mailer");
+const {
+  sendMail,
+  buildVerifyUrl,
+  buildResetUrl,
+  buildVerifyEmail,
+  buildResetEmail,
+} = require("../utils/mailer");
 
 const router = express.Router();
 
@@ -118,54 +124,6 @@ function sha256Hex(input) {
   return crypto.createHash("sha256").update(String(input)).digest("hex");
 }
 
-function buildVerifyUrl({ email, token }) {
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
-  const url = new URL("/verify-email", appUrl);
-  url.searchParams.set("email", email);
-  url.searchParams.set("token", token);
-  return url.toString();
-}
-
-function buildResetUrl({ email, token }) {
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
-  // your frontend route should exist: /reset-password
-  const url = new URL("/reset-password", appUrl);
-  url.searchParams.set("email", email);
-  url.searchParams.set("token", token);
-  return url.toString();
-}
-
-function buildResetEmail({ appName, resetUrl }) {
-  const subject = `${appName}: Reset your password`;
-  const text =
-    `Reset your password by opening this link:\n${resetUrl}\n\n` +
-    `If you didn’t request this, you can ignore this email.`;
-
-  const html = `
-    <div style="font-family: Arial, sans-serif; line-height:1.4;">
-      <h2 style="margin:0 0 12px;">Reset your password</h2>
-      <p style="margin:0 0 24px;">
-        Click the button below to choose a new password.
-      </p>
-      <p style="margin:0 0 24px;">
-        <a href="${resetUrl}"
-           style="display:inline-block;padding:10px 14px;border-radius:10px;text-decoration:none;background:#160000;color:#F5EAEA;font-weight:700;">
-          Reset Password
-        </a>
-      </p>
-      <p style="margin:0 0 8px;color:#444;">
-        Or copy and paste this link:
-      </p>
-      <p style="margin:0 0 0;word-break:break-all;color:#555;">
-        ${resetUrl}
-      </p>
-      <hr style="margin:18px 0;border:none;border-top:1px solid #eee;" />
-      <p style="margin:0;color:#777;font-size:12px;">
-        If you didn’t request this, you can safely ignore this email.
-      </p>
-    </div>`;
-  return { subject, html, text };
-}
 
 async function issueAndSendVerifyEmail(user) {
   const rawToken = crypto.randomBytes(32).toString("hex");

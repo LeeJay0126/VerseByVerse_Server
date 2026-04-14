@@ -19,16 +19,55 @@ const notesRoutes = require("./routes/noteRoutes");
 
 const {
   PORT = 4000,
+  HOST = "0.0.0.0",
   MONGO_URI,
   SESSION_SECRET = "dev",
   NODE_ENV = "development",
   CLIENT_ORIGIN = "http://localhost:3000",
+  CLIENT_ORIGINS = "",
+  TRUST_PROXY = "",
 } = process.env;
+
+const isProduction = NODE_ENV === "production";
+
+function normalizeOrigin(value) {
+  return String(value || "").trim().replace(/\/$/, "");
+}
+
+function parseOriginList(...values) {
+  return Array.from(
+    new Set(
+      values
+        .flatMap((value) => String(value || "").split(","))
+        .map((value) => normalizeOrigin(value))
+        .filter(Boolean)
+    )
+  );
+}
+
+const allowedOrigins = parseOriginList(CLIENT_ORIGIN, CLIENT_ORIGINS);
+
+function isLanOrigin(origin) {
+  try {
+    const url = new URL(origin);
+    const hostname = url.hostname || "";
+    return (
+      /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+      hostname === "localhost" ||
+      hostname === "127.0.0.1"
+    );
+  } catch {
+    return false;
+  }
+}
 
 console.log(">>> boot");
 console.log("NODE_ENV =", NODE_ENV);
 console.log("PORT =", PORT);
-console.log("CLIENT_ORIGIN =", CLIENT_ORIGIN);
+console.log("HOST =", HOST);
+console.log("ALLOWED_ORIGINS =", allowedOrigins);
 console.log("MONGO_URI present? ", !!MONGO_URI);
 
 if (!MONGO_URI) {
@@ -44,9 +83,26 @@ app.use((req, res, next) => {
 });
 
 const corsOptions = {
-  origin: CLIENT_ORIGIN,
+  origin(origin, callback) {
+    const normalizedOrigin = normalizeOrigin(origin);
+
+    if (!normalizedOrigin) {
+      return callback(null, true);
+    }
+
+    if (allowedOrigins.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    if (!isProduction && isLanOrigin(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked for origin: ${normalizedOrigin}`));
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 };
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
@@ -63,7 +119,12 @@ app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
 
-app.set("trust proxy", 1);
+if (TRUST_PROXY) {
+  const numericTrustProxy = Number(TRUST_PROXY);
+  app.set("trust proxy", Number.isNaN(numericTrustProxy) ? TRUST_PROXY : numericTrustProxy);
+} else {
+  app.set("trust proxy", isProduction ? 1 : false);
+}
 
 /* ---------- session ---------- */
 app.use(
@@ -79,8 +140,8 @@ app.use(
     }),
     cookie: {
       httpOnly: true,
-      secure: NODE_ENV === "production",
-      sameSite: "lax",
+      secure: isProduction,
+      sameSite: isProduction ? "lax" : false,
       maxAge: 1000 * 60 * 60 * 2,
     },
   })
@@ -114,8 +175,8 @@ app.use((err, _req, res, _next) => {
     await mongoose.connect(MONGO_URI);
     console.log("✅ MongoDB connected");
 
-    app.listen(PORT, () => {
-      console.log(`✅ LISTENING: http://localhost:${PORT}`);
+    app.listen(PORT, HOST, () => {
+      console.log(`✅ LISTENING: http://${HOST}:${PORT}`);
     });
   } catch (e) {
     console.error("❌ startup failed:", e);
