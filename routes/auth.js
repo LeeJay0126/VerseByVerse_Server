@@ -129,17 +129,29 @@ async function issueAndSendVerifyEmail(user) {
   const rawToken = crypto.randomBytes(32).toString("hex");
   const tokenHash = sha256Hex(rawToken);
 
-  user.emailVerifyTokenHash = tokenHash;
-  user.emailVerifyTokenExpiresAt = new Date(Date.now() + VERIFY_TOKEN_TTL_MS);
-  user.emailVerifyLastSentAt = new Date();
-  await user.save();
-
   const verifyUrl = buildVerifyUrl({ email: user.email, token: rawToken });
   const appName = process.env.APP_NAME || "App";
   const { subject, html, text } = buildVerifyEmail({ appName, verifyUrl });
 
-  const info = await sendMail({ to: user.email, subject, html, text });
-  console.log("[verify email sent]", { to: user.email, messageId: info?.messageId });
+  user.emailVerifyTokenHash = tokenHash;
+  user.emailVerifyTokenExpiresAt = new Date(Date.now() + VERIFY_TOKEN_TTL_MS);
+  user.emailVerifyLastSentAt = undefined;
+  await user.save();
+
+  try {
+    const info = await sendMail({ to: user.email, subject, html, text });
+    user.emailVerifyLastSentAt = new Date();
+    await user.save();
+    console.log("[verify email sent]", { to: user.email, messageId: info?.messageId });
+  } catch (error) {
+    user.emailVerifyTokenHash = undefined;
+    user.emailVerifyTokenExpiresAt = undefined;
+    user.emailVerifyLastSentAt = undefined;
+    await user.save().catch((saveErr) => {
+      console.error("[verify email rollback error]", saveErr);
+    });
+    throw error;
+  }
 }
 
 async function issueAndSendPasswordResetEmail(user) {
