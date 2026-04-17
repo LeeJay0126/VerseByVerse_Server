@@ -1,4 +1,6 @@
-require("dotenv").config();
+const fs = require("fs");
+const path = require("path");
+const dotenv = require("dotenv");
 const express = require("express");
 const mongoose = require("mongoose");
 const session = require("express-session");
@@ -6,7 +8,15 @@ const MongoStore = require("connect-mongo");
 const cors = require("cors");
 const morgan = require("morgan");
 const cookieParser = require("cookie-parser");
-const path = require("path");
+
+const envFiles = [".env", ".env.local"];
+
+for (const envFile of envFiles) {
+  const envPath = path.join(__dirname, envFile);
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath, override: envFile !== ".env" });
+  }
+}
 
 const userRoutes = require("./routes/UserRoutes");
 const authRoutes = require("./routes/auth");
