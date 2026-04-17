@@ -22,7 +22,7 @@ const MAX_PW_LEN = 72;
 const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const usernamePattern = /^[a-zA-Z0-9._]+$/;
 
-const VERIFY_TOKEN_TTL_MS = 1000 * 60 * 60 * 24; // 24h
+const VERIFY_TOKEN_TTL_MS = 1000 * 60 * 5; // 5m
 const RESEND_COOLDOWN_MS = 1000 * 60; // 60s
 
 const PW_RESET_TOKEN_TTL_MS = 1000 * 60 * 30; // 30m
@@ -362,18 +362,6 @@ router.post("/resend-verification", async (req, res) => {
     const lastSent = user.emailVerifyLastSentAt ? new Date(user.emailVerifyLastSentAt).getTime() : 0;
     if (Date.now() - lastSent < RESEND_COOLDOWN_MS) {
       return res.status(429).json({ ok: false, code: "TOO_SOON", error: "Please wait before resending." });
-    }
-
-    const hasToken = !!user.emailVerifyTokenHash && !!user.emailVerifyTokenExpiresAt;
-    const stillValid =
-      hasToken && new Date(user.emailVerifyTokenExpiresAt).getTime() > Date.now();
-
-    if (stillValid) {
-      return res.json({
-        ok: true,
-        code: "ALREADY_SENT",
-        message: "Verification email already sent recently. Please check your inbox.",
-      });
     }
 
     await issueAndSendVerifyEmail(user);
