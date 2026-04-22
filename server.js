@@ -174,6 +174,7 @@ app.use(
     name: "connect.sid",
     secret: SESSION_SECRET,
     resave: false,
+    rolling: true,
     saveUninitialized: false,
     store: MongoStore.create({
       mongoUrl: mongoUri,
@@ -204,7 +205,8 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.use((err, _req, res, _next) => {
   console.error("[unhandled error]", err);
-  res.status(500).json({ ok: false, error: err.message });
+  const message = isProduction ? "Internal server error" : err.message;
+  res.status(500).json({ ok: false, error: message });
 });
 
 (async () => {

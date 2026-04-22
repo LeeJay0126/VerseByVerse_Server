@@ -25,7 +25,7 @@ const toReplyDto = (reply) => {
     : null;
 
   return {
-    id: reply._id,
+    id: String(reply._id),
     body: reply.body,
     author: fullName || reply.author?.username || "Unknown",
     authorId: reply.author?._id ? String(reply.author._id) : null,
