@@ -2,6 +2,11 @@ const express = require("express");
 const Community = require("../models/Community");
 const CommunityMembership = require("../models/CommunityMembership");
 const CommunityJoinRequest = require("../models/CommunityJoinRequest");
+const CommunityPost = require("../models/CommunityPost");
+const CommunityReply = require("../models/CommunityReply");
+const CommunityPollVote = require("../models/CommunityPollVote");
+const BibleStudySubmission = require("../models/BibleStudySubmission");
+const Notification = require("../models/Notifications");
 const User = require("../models/User");
 const requireAuth = require("../middleware/requireAuth");
 const createNotification = require("../utils/createNotifications");
@@ -48,6 +53,19 @@ const canManageMembers = async (userId, community) => {
 
   const leadersAllowed = Boolean(community?.settings?.leadersCanManageMembers);
   return leadersAllowed && membership.role === "Leader";
+};
+
+const COMMUNITY_TEXT_LIMITS = {
+  header: 120,
+  subheader: 240,
+  content: 5000,
+};
+
+const cleanCommunityText = (value, field) => {
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim();
+  if (!cleaned) return null;
+  return cleaned.slice(0, COMMUNITY_TEXT_LIMITS[field]);
 };
 
 const getManagerUserIds = async (communityId) => {
@@ -260,6 +278,101 @@ router.get("/:id", requireAuth(), async (req, res) => {
     });
   } catch (err) {
     console.error("[get community detail error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.patch("/:id/settings", requireAuth(), async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+    const userId = req.session.userId;
+    const { leadersCanManageMembers } = req.body || {};
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
+
+    if (!isOwner(community, userId)) {
+      return res.status(403).json({ ok: false, error: "Only the community owner can update settings" });
+    }
+
+    community.settings = {
+      ...(community.settings || {}),
+      leadersCanManageMembers: Boolean(leadersCanManageMembers),
+    };
+    await community.save();
+
+    return res.json({
+      ok: true,
+      community: {
+        id: community._id,
+        header: community.header,
+        subheader: community.subheader,
+        content: community.content,
+        type: community.type,
+        membersCount: community.membersCount,
+        lastActivityAt: community.lastActivityAt,
+        heroImageUrl: community.heroImageUrl || null,
+        owner: community.owner,
+        settings: {
+          leadersCanManageMembers: Boolean(community?.settings?.leadersCanManageMembers),
+        },
+      },
+    });
+  } catch (err) {
+    console.error("[update community settings error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.patch("/:id", requireAuth(), async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+    const userId = req.session.userId;
+    const next = req.body || {};
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
+
+    if (!isOwner(community, userId)) {
+      return res.status(403).json({ ok: false, error: "Only the community owner can edit details" });
+    }
+
+    const updates = {};
+    for (const field of ["header", "subheader", "content"]) {
+      if (Object.prototype.hasOwnProperty.call(next, field)) {
+        const cleaned = cleanCommunityText(next[field], field);
+        if (!cleaned) {
+          return res.status(400).json({ ok: false, error: `${field} is required` });
+        }
+        updates[field] = cleaned;
+      }
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({ ok: false, error: "No valid community details provided" });
+    }
+
+    Object.assign(community, updates);
+    await community.save();
+
+    return res.json({
+      ok: true,
+      community: {
+        id: community._id,
+        header: community.header,
+        subheader: community.subheader,
+        content: community.content,
+        type: community.type,
+        membersCount: community.membersCount,
+        lastActivityAt: community.lastActivityAt,
+        heroImageUrl: community.heroImageUrl || null,
+        settings: {
+          leadersCanManageMembers: Boolean(community?.settings?.leadersCanManageMembers),
+        },
+      },
+    });
+  } catch (err) {
+    console.error("[update community details error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
@@ -737,6 +850,48 @@ router.delete("/:id/members/:userId", requireAuth(), async (req, res) => {
     return res.json({ ok: true });
   } catch (err) {
     console.error("[expel member error]", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.delete("/:id/disband", requireAuth(), async (req, res) => {
+  try {
+    const { id: communityId } = req.params;
+    const userId = getUserId(req);
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
+
+    if (!isOwner(community, userId)) {
+      return res.status(403).json({ ok: false, error: "Only the community owner can disband this community" });
+    }
+
+    const postIds = await CommunityPost.find({ community: communityId }).distinct("_id").exec();
+
+    const pollVotesResult = await CommunityPollVote.deleteMany({ post: { $in: postIds } }).exec();
+    const repliesResult = await CommunityReply.deleteMany({ post: { $in: postIds } }).exec();
+    const submissionsResult = await BibleStudySubmission.deleteMany({ community: communityId }).exec();
+    const postsResult = await CommunityPost.deleteMany({ community: communityId }).exec();
+    const membershipsResult = await CommunityMembership.deleteMany({ community: communityId }).exec();
+    const joinRequestsResult = await CommunityJoinRequest.deleteMany({ community: communityId }).exec();
+    const notificationsResult = await Notification.deleteMany({ community: communityId }).exec();
+    const communityResult = await Community.deleteOne({ _id: communityId }).exec();
+
+    return res.json({
+      ok: true,
+      deleted: {
+        community: communityResult.deletedCount || 0,
+        memberships: membershipsResult.deletedCount || 0,
+        joinRequests: joinRequestsResult.deletedCount || 0,
+        posts: postsResult.deletedCount || 0,
+        replies: repliesResult.deletedCount || 0,
+        bibleStudySubmissions: submissionsResult.deletedCount || 0,
+        pollVotes: pollVotesResult.deletedCount || 0,
+        notifications: notificationsResult.deletedCount || 0,
+      },
+    });
+  } catch (err) {
+    console.error("[disband community error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });

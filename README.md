@@ -84,6 +84,26 @@ Main routes:
 
 Login uses `express-session` with MongoDB-backed session storage. Session cookies are HTTP-only, refresh during active use, and expire after 2 hours. Email verification links expire after 5 minutes. Verification resend is rate-limited by a 60-second cooldown.
 
+### Authentication Limits
+
+Signup and account routes enforce these backend rules:
+
+- First name and last name are required on signup, normalized for whitespace, and limited to 20 characters each.
+- Email is required, trimmed, lowercased, limited to 254 characters, must match a basic `name@domain.tld` shape, and must be unique.
+- Username is required, trimmed, lowercased, unique, and must be 4 to 20 characters.
+- Username characters are limited to letters, numbers, periods, and underscores.
+- Usernames cannot start or end with `.` or `_`.
+- Usernames cannot contain `..`, `__`, `._`, or `_.`.
+- Passwords are required and must be 10 to 72 characters.
+- Passwords cannot be in the built-in common-password list.
+- Password strength must pass `zxcvbn` with a score of at least 3, checked against username, email, first name, last name, and the email local-part.
+- Email verification tokens last 5 minutes.
+- Verification resend is blocked for 60 seconds after a successful send; after that cooldown, resend issues a fresh token and email.
+- Password reset tokens last 30 minutes.
+- Password reset requests use a 60-second cooldown and avoid account enumeration by returning success when no matching user exists.
+- Login is blocked until the account email is verified.
+- Change-password requires the current password, a valid new password, and the new password must be different from the current password.
+
 ## API Areas
 
 ### Health
