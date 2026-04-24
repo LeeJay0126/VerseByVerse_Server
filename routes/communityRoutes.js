@@ -80,6 +80,30 @@ const getManagerUserIds = async (communityId) => {
   return rows.map((r) => String(r.user)).filter(Boolean);
 };
 
+const getJoinRequestNotificationRecipientUserIds = async (community) => {
+  const ownerId = String(community?.owner?._id || community?.owner || "");
+  const recipientIds = new Set(ownerId ? [ownerId] : []);
+
+  if (!community?.settings?.leadersCanManageMembers) {
+    return Array.from(recipientIds);
+  }
+
+  const leaderRows = await CommunityMembership.find({
+    community: community._id,
+    role: "Leader",
+  })
+    .select("user")
+    .lean()
+    .exec();
+
+  leaderRows.forEach((row) => {
+    const userId = String(row?.user || "");
+    if (userId) recipientIds.add(userId);
+  });
+
+  return Array.from(recipientIds);
+};
+
 const notifyManagers = async ({ community, actorId, message, type }) => {
   const managerIds = await getManagerUserIds(community._id);
   const unique = Array.from(new Set(managerIds)).filter((id) => id && id !== String(actorId || ""));
@@ -503,16 +527,22 @@ router.post("/:id/request-join", requireAuth(), async (req, res) => {
 
     const message = `${requesterName} has requested to join ${community.header}.`;
 
-    await createNotification({
-      user: community.owner?._id || community.owner,
-      type: "COMMUNITY_JOIN_REQUEST",
-      message,
-      community: community._id,
-      actor: requesterId,
-      target: { kind: "COMMUNITY_JOIN_REQUEST", id: jr._id },
-      status: "pending",
-      dedupeKey: `COMMUNITY_JOIN_REQUEST:${String(community._id)}:${String(jr._id)}`,
-    });
+    const recipientUserIds = await getJoinRequestNotificationRecipientUserIds(community);
+
+    await Promise.all(
+      recipientUserIds.map((userId) =>
+        createNotification({
+          user: userId,
+          type: "COMMUNITY_JOIN_REQUEST",
+          message,
+          community: community._id,
+          actor: requesterId,
+          target: { kind: "COMMUNITY_JOIN_REQUEST", id: jr._id },
+          status: "pending",
+          dedupeKey: `COMMUNITY_JOIN_REQUEST:${String(community._id)}:${String(jr._id)}`,
+        })
+      )
+    );
 
     return res.json({ ok: true, requestId: String(jr._id) });
   } catch (err) {
