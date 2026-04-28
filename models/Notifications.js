@@ -32,5 +32,9 @@ NotificationSchema.index(
     },
   }
 );
+NotificationSchema.index({ user: 1, createdAt: -1 });
+NotificationSchema.index({ user: 1, readAt: 1, createdAt: -1 });
+NotificationSchema.index({ user: 1, community: 1 });
+NotificationSchema.index({ "target.kind": 1, "target.id": 1 });
 
 module.exports = mongoose.model("Notification", NotificationSchema);

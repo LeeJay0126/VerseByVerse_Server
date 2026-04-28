@@ -12,6 +12,7 @@ const CommunityJoinRequestSchema = new mongoose.Schema(
 );
 
 CommunityJoinRequestSchema.index({ community: 1, user: 1 }, { unique: true });
+CommunityJoinRequestSchema.index({ community: 1, status: 1, createdAt: -1 });
 
 module.exports =
     mongoose.models.CommunityJoinRequest ||

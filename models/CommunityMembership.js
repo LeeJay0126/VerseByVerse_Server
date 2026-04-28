@@ -32,5 +32,6 @@ const CommunityMembershipSchema = new mongoose.Schema(
 );
 
 CommunityMembershipSchema.index({ user: 1, community: 1 }, { unique: true });
+CommunityMembershipSchema.index({ community: 1, role: 1 });
 
 module.exports = mongoose.model("CommunityMembership", CommunityMembershipSchema);

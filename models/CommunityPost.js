@@ -86,9 +86,13 @@ const CommunityPostSchema = new mongoose.Schema(
     studyContent: { type: StudyContentSchema, default: undefined },
 
     replyCount: { type: Number, default: 0 },
+    lastReplyAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
+
+CommunityPostSchema.index({ community: 1, createdAt: -1 });
+CommunityPostSchema.index({ community: 1, type: 1 });
 
 module.exports =
   mongoose.models.CommunityPost || mongoose.model("CommunityPost", CommunityPostSchema);

@@ -21,5 +21,7 @@ const NoteSchema = new mongoose.Schema(
 );
 
 NoteSchema.index({ user: 1, updatedAt: -1 });
+NoteSchema.index({ user: 1, bibleId: 1, chapterId: 1, updatedAt: -1 });
+NoteSchema.index({ user: 1, bibleId: 1, chapterId: 1, rangeStart: 1, rangeEnd: 1 });
 
 module.exports = mongoose.model("Note", NoteSchema);
