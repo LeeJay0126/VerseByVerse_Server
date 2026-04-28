@@ -69,6 +69,11 @@ router.get("/:id/posts/:postId/replies", requireAuth(), async (req, res) => {
     const post = await CommunityPost.findOne({ _id: postId, community: communityId }).exec();
     if (!post) return res.status(404).json({ ok: false, error: "Post not found" });
 
+    const membership = await CommunityMembership.findOne({ user: req.session.userId, community: communityId }).exec();
+    if (!membership) {
+      return res.status(403).json({ ok: false, error: "You must join this community to view replies." });
+    }
+
     const replies = await CommunityReply.find({ post: post._id })
       .sort({ createdAt: 1 })
       .populate("author", "username firstName lastName")

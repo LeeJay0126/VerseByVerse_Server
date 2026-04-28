@@ -1,4 +1,6 @@
 const express = require("express");
+const fs = require("fs/promises");
+const path = require("path");
 const Community = require("../models/Community");
 const CommunityMembership = require("../models/CommunityMembership");
 const CommunityJoinRequest = require("../models/CommunityJoinRequest");
@@ -13,6 +15,7 @@ const createNotification = require("../utils/createNotifications");
 const uploadCommunityHero = require("../middleware/communityHeroUpload");
 
 const router = express.Router();
+const communityHeroUploadDir = path.join(__dirname, "..", "uploads", "community-heroes");
 
 const toUserSummary = (userDoc) => {
   if (!userDoc) return null;
@@ -123,6 +126,63 @@ const notifyManagers = async ({ community, actorId, message, type }) => {
   );
 };
 
+const authorizeCommunityHeroUpload = async (req, res, next) => {
+  try {
+    const { id: communityId } = req.params;
+    const userId = req.session.userId;
+
+    const community = await Community.findById(communityId).exec();
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
+
+    const membership = await CommunityMembership.findOne({
+      user: userId,
+      community: communityId,
+    }).exec();
+
+    if (!membership || !["Owner", "Leader"].includes(membership.role)) {
+      return res.status(403).json({
+        ok: false,
+        error: "You do not have permission to update this hero image.",
+      });
+    }
+
+    req.community = community;
+    return next();
+  } catch (err) {
+    return next(err);
+  }
+};
+
+const uploadCommunityHeroImage = (req, res, next) => {
+  uploadCommunityHero.single("heroImage")(req, res, (err) => {
+    if (!err) return next();
+
+    if (err?.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ ok: false, error: "Hero image must be 5MB or smaller" });
+    }
+
+    return res.status(400).json({ ok: false, error: err?.message || "Invalid image upload" });
+  });
+};
+
+const deleteCommunityHeroFile = async (heroImageUrl) => {
+  if (!heroImageUrl || typeof heroImageUrl !== "string") return;
+  if (!heroImageUrl.startsWith("/uploads/community-heroes/")) return;
+
+  const filename = path.basename(heroImageUrl);
+  const filePath = path.resolve(communityHeroUploadDir, filename);
+  const uploadRoot = path.resolve(communityHeroUploadDir);
+  if (!filePath.startsWith(`${uploadRoot}${path.sep}`)) return;
+
+  try {
+    await fs.unlink(filePath);
+  } catch (err) {
+    if (err?.code !== "ENOENT") {
+      console.warn("[delete community hero image warning]", err);
+    }
+  }
+};
+
 router.post("/", requireAuth(), async (req, res) => {
   try {
     const { header, subheader, content, type } = req.body || {};
@@ -165,7 +225,7 @@ router.post("/", requireAuth(), async (req, res) => {
     });
   } catch (err) {
     console.error("[create community error]", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
@@ -196,7 +256,7 @@ router.get("/my", requireAuth(), async (req, res) => {
     return res.json({ ok: true, communities });
   } catch (err) {
     console.error("[my communities error]", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
@@ -208,7 +268,7 @@ router.get("/discover", async (req, res) => {
     const filter = {};
 
     if (q) {
-      const regex = new RegExp(q.trim(), "i");
+      const regex = new RegExp(escapeRegex(String(q).trim().slice(0, 80)), "i");
       filter.$or = [{ header: regex }, { subheader: regex }, { content: regex }];
     }
 
@@ -252,7 +312,7 @@ router.get("/discover", async (req, res) => {
     return res.json({ ok: true, communities: result });
   } catch (err) {
     console.error("[discover communities error]", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
@@ -689,34 +749,23 @@ router.post("/:id/join-requests/:requestId/reject", requireAuth(), async (req, r
   }
 });
 
-router.post("/:id/hero-image", requireAuth(), uploadCommunityHero.single("heroImage"), async (req, res) => {
+router.post("/:id/hero-image", requireAuth(), authorizeCommunityHeroUpload, uploadCommunityHeroImage, async (req, res) => {
   try {
-    const { id: communityId } = req.params;
-    const userId = req.session.userId;
-
-    const community = await Community.findById(communityId).exec();
-    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
-
-    const membership = await CommunityMembership.findOne({
-      user: userId,
-      community: communityId,
-    }).exec();
-
-    if (!membership || !["Owner", "Leader"].includes(membership.role)) {
-      return res.status(403).json({
-        ok: false,
-        error: "You do not have permission to update this hero image.",
-      });
-    }
+    const community = req.community;
 
     if (!req.file) return res.status(400).json({ ok: false, error: "No file uploaded." });
 
+    const previousHeroImageUrl = community.heroImageUrl || null;
     const relativePath = `/uploads/community-heroes/${req.file.filename}`;
     community.heroImageUrl = relativePath;
     await community.save();
+    await deleteCommunityHeroFile(previousHeroImageUrl);
 
     return res.json({ ok: true, heroImageUrl: relativePath });
   } catch (err) {
+    if (req.file?.filename) {
+      await deleteCommunityHeroFile(`/uploads/community-heroes/${req.file.filename}`);
+    }
     console.error("[update community hero image error]", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
@@ -797,12 +846,13 @@ router.get("/:id/members", requireAuth(), async (req, res) => {
     const { id: communityId } = req.params;
     const userId = getUserId(req);
 
+    const community = await Community.findById(communityId).select("_id").lean().exec();
+    if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
+
     const membership = await CommunityMembership.findOne({ user: userId, community: communityId })
       .select("_id")
       .lean()
       .exec();
-
-    if (!membership) return res.status(403).json({ ok: false, error: "Not a member of this community" });
 
     const memberships = await CommunityMembership.find({ community: communityId })
       .populate("user", "username firstName lastName email")
@@ -813,7 +863,7 @@ router.get("/:id/members", requireAuth(), async (req, res) => {
       .map((m) => ({
         userId: m.user._id,
         name: toDisplayName(m.user),
-        email: m.user.email || null,
+        email: membership ? m.user.email || null : null,
         role: m.role,
       }))
       .sort((a, b) => {

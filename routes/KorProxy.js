@@ -4,6 +4,11 @@ const fetch = require("node-fetch");
 
 const router = express.Router();
 
+const configuredKorTimeoutMs = Number(process.env.KOR_FETCH_TIMEOUT_MS || 8000);
+const KOR_FETCH_TIMEOUT_MS =
+  Number.isFinite(configuredKorTimeoutMs) && configuredKorTimeoutMs > 0 ? configuredKorTimeoutMs : 8000;
+const KOR_BOOK_CODE_PATTERN = /^[a-z0-9]{2,8}$/i;
+
 // GET /api/passage/:versionId/:chapterId
 router.get("/passage/:versionId/:chapterId", async (req, res) => {
   const { versionId, chapterId } = req.params;
@@ -18,14 +23,14 @@ router.get("/passage/:versionId/:chapterId", async (req, res) => {
       const [bookCode, chapterStr] = chapterId.split(".");
       const chapterNumber = Number(chapterStr);
 
-      if (!bookCode || !chapterNumber) {
+      if (!bookCode || !KOR_BOOK_CODE_PATTERN.test(bookCode) || !Number.isInteger(chapterNumber) || chapterNumber < 1) {
         return res.status(400).json({ error: "Invalid KOR chapterId" });
       }
 
       const upstreamUrl = `http://ibibles.net/quote.php?kor-${bookCode}/${chapterNumber}:1-200`;
       console.log("[KOR] Fetch:", upstreamUrl);
 
-      const upstreamRes = await fetch(upstreamUrl);
+      const upstreamRes = await fetch(upstreamUrl, { timeout: KOR_FETCH_TIMEOUT_MS });
       if (!upstreamRes.ok) {
         console.error("KOR upstream error", upstreamRes.status, upstreamUrl);
         return res
@@ -79,12 +84,9 @@ router.get("/passage/:versionId/:chapterId", async (req, res) => {
         }
       }
 
-      if (verses.length === 0 && plain) {
-        verses.push({
-          id: `${bookCode}.${chapterNumber}.1`,
-          number: 1,
-          text: plain,
-        });
+      if (verses.length === 0) {
+        console.error("KOR parse produced no verses", { upstreamUrl, chapterId, plainLength: plain.length });
+        return res.status(502).json({ error: "KOR passage parse failed" });
       }
 
       const payload = {
@@ -102,7 +104,7 @@ router.get("/passage/:versionId/:chapterId", async (req, res) => {
     return res.status(501).json({ error: "Not implemented for this versionId" });
   } catch (err) {
     console.error("Error fetching passage:", err);
-    return res.status(500).json({ error: err.message });
+    return res.status(502).json({ error: "KOR passage fetch failed" });
   }
 });
 

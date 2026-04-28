@@ -19,6 +19,10 @@ const bumpCommunityActivity = async (communityId) => {
   await Community.updateOne({ _id: communityId }, { $set: { lastActivityAt: new Date() } });
 };
 
+const getCommunityMembership = (communityId, userId) => {
+  return CommunityMembership.findOne({ community: communityId, user: userId }).exec();
+};
+
 const canManagePost = async ({ communityId, userId, postAuthorId }) => {
   if (String(postAuthorId) === String(userId)) return true;
 
@@ -183,6 +187,11 @@ router.get("/:id/posts", requireAuth(), async (req, res) => {
 
     const community = await Community.findById(communityId).exec();
     if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
+
+    const membership = await getCommunityMembership(communityId, req.session.userId);
+    if (!membership) {
+      return res.status(403).json({ ok: false, error: "You must join this community to view posts." });
+    }
 
     const posts = await CommunityPost.find({ community: communityId })
       .sort({ createdAt: -1 })
@@ -410,6 +419,11 @@ router.get("/:id/posts/:postId", requireAuth(), async (req, res) => {
 
     const community = await Community.findById(communityId).exec();
     if (!community) return res.status(404).json({ ok: false, error: "Community not found" });
+
+    const membership = await getCommunityMembership(communityId, userId);
+    if (!membership) {
+      return res.status(403).json({ ok: false, error: "You must join this community to view posts." });
+    }
 
     const post = await CommunityPost.findOne({ _id: postId, community: communityId })
       .populate("author", "username firstName lastName")

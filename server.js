@@ -104,6 +104,28 @@ function isLanOrigin(origin) {
   }
 }
 
+function isAllowedRequestOrigin(origin) {
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) return true;
+  if (allowedOrigins.includes(normalizedOrigin)) return true;
+  return !isProduction && isLanOrigin(normalizedOrigin);
+}
+
+function getRequestOrigin(req) {
+  const origin = req.get("origin");
+  if (origin) return origin;
+
+  const referer = req.get("referer");
+  if (!referer) return "";
+
+  try {
+    const url = new URL(referer);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "";
+  }
+}
+
 console.log(">>> boot");
 console.log("NODE_ENV =", NODE_ENV);
 console.log("PORT =", PORT);
@@ -128,20 +150,11 @@ app.use((req, res, next) => {
 
 const corsOptions = {
   origin(origin, callback) {
+    if (isAllowedRequestOrigin(origin)) {
+      return callback(null, true);
+    }
+
     const normalizedOrigin = normalizeOrigin(origin);
-
-    if (!normalizedOrigin) {
-      return callback(null, true);
-    }
-
-    if (allowedOrigins.includes(normalizedOrigin)) {
-      return callback(null, true);
-    }
-
-    if (!isProduction && isLanOrigin(normalizedOrigin)) {
-      return callback(null, true);
-    }
-
     return callback(new Error(`CORS blocked for origin: ${normalizedOrigin}`));
   },
   credentials: true,
@@ -150,6 +163,17 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
+
+app.use((req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+
+  const requestOrigin = getRequestOrigin(req);
+  if (requestOrigin && !isAllowedRequestOrigin(requestOrigin)) {
+    return res.status(403).json({ ok: false, error: "Request origin not allowed" });
+  }
+
+  return next();
+});
 
 app.use((req, _res, next) => {
   if (req.method === "OPTIONS") {

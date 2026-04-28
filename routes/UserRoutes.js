@@ -4,6 +4,24 @@ const requireAuth = require("../middleware/requireAuth");
 
 const router = express.Router();
 
+const MAX_NAME_LEN = 20;
+const PROFILE_NAME_FIELDS = [
+  { key: "firstName", label: "firstName" },
+  { key: "lastName", label: "lastName" },
+];
+
+const normalizeSpaces = (value) => String(value || "").replace(/\s+/g, " ").trim();
+
+const validateProfileName = (value, label) => {
+  if (typeof value !== "string") return { ok: false, error: `${label} must be a string` };
+
+  const normalized = normalizeSpaces(value);
+  if (!normalized) return { ok: false, error: `${label} required` };
+  if (normalized.length > MAX_NAME_LEN) return { ok: false, error: `${label} too long` };
+
+  return { ok: true, value: normalized };
+};
+
 /**
  * GET /users/me
  * Returns user profile (requires session + verified email by default)
@@ -32,8 +50,18 @@ router.patch("/me", requireAuth({ requireVerified: true }), async (req, res) => 
     const body = req.body || {};
     const updates = {};
 
-    if (typeof body.firstName === "string") updates.firstName = body.firstName.trim();
-    if (typeof body.lastName === "string") updates.lastName = body.lastName.trim();
+    for (const { key, label } of PROFILE_NAME_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+
+      const validated = validateProfileName(body[key], label);
+      if (!validated.ok) return res.status(400).json({ ok: false, error: validated.error });
+
+      updates[key] = validated.value;
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({ ok: false, error: "No valid profile fields provided" });
+    }
 
     const user = await User.findByIdAndUpdate(req.session.userId, updates, {
       new: true,
@@ -46,6 +74,9 @@ router.patch("/me", requireAuth({ requireVerified: true }), async (req, res) => 
     return res.json({ ok: true, user });
   } catch (e) {
     console.error("[users patch error]", e);
+    if (e?.name === "ValidationError") {
+      return res.status(400).json({ ok: false, error: "Invalid profile update" });
+    }
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });

@@ -124,6 +124,76 @@ function sha256Hex(input) {
   return crypto.createHash("sha256").update(String(input)).digest("hex");
 }
 
+function createMemoryRateLimit({ windowMs, max, keyPrefix, key }) {
+  const hits = new Map();
+  let lastCleanupAt = 0;
+
+  return function memoryRateLimit(req, res, next) {
+    const now = Date.now();
+
+    if (now - lastCleanupAt > windowMs) {
+      lastCleanupAt = now;
+      for (const [bucketKey, record] of hits.entries()) {
+        if (record.resetAt <= now) hits.delete(bucketKey);
+      }
+    }
+
+    const rawKey = key ? key(req) : req.ip;
+    const bucketKey = `${keyPrefix}:${rawKey || "unknown"}`;
+    const record = hits.get(bucketKey);
+
+    if (!record || record.resetAt <= now) {
+      hits.set(bucketKey, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    record.count += 1;
+    if (record.count > max) {
+      const retryAfter = Math.max(1, Math.ceil((record.resetAt - now) / 1000));
+      res.set("Retry-After", String(retryAfter));
+      return res.status(429).json({
+        ok: false,
+        code: "RATE_LIMITED",
+        error: "Too many attempts. Please try again later.",
+      });
+    }
+
+    return next();
+  };
+}
+
+const authKey = (req) => {
+  const identifier = String(req.body?.identifier || req.body?.email || "").trim().toLowerCase();
+  return `${req.ip}:${identifier}`;
+};
+
+const signupRateLimit = createMemoryRateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyPrefix: "signup",
+});
+
+const loginRateLimit = createMemoryRateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  keyPrefix: "login",
+  key: authKey,
+});
+
+const emailActionRateLimit = createMemoryRateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  keyPrefix: "email-action",
+  key: authKey,
+});
+
+const changePasswordRateLimit = createMemoryRateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyPrefix: "change-password",
+  key: (req) => req.session?.userId || req.ip,
+});
+
 
 async function issueAndSendVerifyEmail(user) {
   const rawToken = crypto.randomBytes(32).toString("hex");
@@ -174,7 +244,7 @@ async function issueAndSendPasswordResetEmail(user) {
 /**
  * POST /auth/signup
  */
-router.post("/signup", async (req, res) => {
+router.post("/signup", signupRateLimit, async (req, res) => {
   try {
     const body = req.body || {};
 
@@ -349,7 +419,7 @@ router.get("/verify-email", async (req, res) => {
  * POST /auth/resend-verification
  * Body: { email }
  */
-router.post("/resend-verification", async (req, res) => {
+router.post("/resend-verification", emailActionRateLimit, async (req, res) => {
   try {
     const emailV = validateEmail(req.body?.email);
     if (!emailV.ok) return res.status(400).json({ ok: false, error: emailV.error });
@@ -377,7 +447,7 @@ router.post("/resend-verification", async (req, res) => {
  * Body: { email }
  * No session required. Always returns ok:true to avoid account enumeration.
  */
-router.post("/forgot-password", async (req, res) => {
+router.post("/forgot-password", emailActionRateLimit, async (req, res) => {
   try {
     const emailV = validateEmail(req.body?.email);
     if (!emailV.ok) return res.status(400).json({ ok: false, error: emailV.error });
@@ -405,7 +475,7 @@ router.post("/forgot-password", async (req, res) => {
  * Body: { email, token, newPassword }
  * No session required.
  */
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", emailActionRateLimit, async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const token = String(req.body?.token || "").trim();
@@ -468,7 +538,7 @@ router.post("/reset-password", async (req, res) => {
  * POST /auth/login
  * Block login until verified
  */
-router.post("/login", async (req, res) => {
+router.post("/login", loginRateLimit, async (req, res) => {
   try {
     let { identifier, email, password } = req.body || {};
     const loginId = (identifier || email || "").trim().toLowerCase();
@@ -569,7 +639,7 @@ router.post("/logout", (req, res) => {
  * POST /auth/change-password
  * Logged-in users only (session required)
  */
-router.post("/change-password", async (req, res) => {
+router.post("/change-password", changePasswordRateLimit, async (req, res) => {
   try {
     if (!req.session?.userId) {
       return res.status(401).json({ ok: false, error: "Not authenticated" });
