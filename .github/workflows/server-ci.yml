@@ -1,0 +1,36 @@
+name: Server CI
+
+on:
+  push:
+    branches:
+      - main
+      - "server/**"
+      - "server-*"
+      - "qa-automation/**"
+      - "qa-automation-*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  server-tests:
+    name: Node test suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run server tests
+        run: npm test
